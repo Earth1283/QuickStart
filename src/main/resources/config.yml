@@ -1,5 +1,14 @@
-# LAZY starts features on demand. ADHD also warms them up in the background.
-# ALL_AT_ONCE admits players after all enabled features are ready.
+# Startup modes: LAZY | ADHD | ALL_AT_ONCE
+# LAZY - Starts up the core of the plugin, and then loads features as players use them
+# ADHD (Default) - This loads only the core of the plugin when the server starts, but we use the
+#                  gap between the server finishing its initialization phase and the first player
+#                  joins to initialize modules.
+# ALL_AT_ONCE - Load all enabled modules on startup.
+
+# How do I choose? For most servers, ADHD is enough. If your server is behind a proxy, such as
+# Velocity or Bungeecord, enable ALL_AT_ONCE, as proxies tend to release a large batch of players
+# the moment Paper declares itself fully initialized, leading to higher CPU usage at the worst time.
+# However, if your server is running on a free tier server host or limited RAM, use LAZY.
 startup: ADHD
 
 modules:
@@ -28,7 +37,7 @@ performance:
   warmup:
     enabled: true
     empty-server-workers: 2
-    active-server-workers: 1
+    active-server-workers: 1 # Keep this less than the value you put for empty server workers.
     pause-optional-on-join: true
 
 storage:
