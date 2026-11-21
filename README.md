@@ -29,7 +29,11 @@ Use `/qs modules` to inspect module states and `/qs doctor` to check configurati
 
 Home and warp names are case-insensitive and accept up to 32 letters, digits, underscores, or hyphens. Optional warp visibility uses `quickstart.warp.<name>` and `quickstart.warps.bypass`. Enable `spawn.first-join` to send new players to the configured spawn when they join. The default request expiration is 60 seconds and the default cooldown for outgoing requests and request teleports is five seconds.
 
-`/qs reload` applies home limits, warp visibility, first-join spawn, and teleportation settings. Startup strategy, module selection, and warmup settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
+`/qs reload` applies home limits, warp visibility, first-join spawn, teleportation settings, and messages. Startup strategy, module selection, and warmup settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
+
+## Messages
+
+QuickStart creates `plugins/QuickStart/message.yml` on startup. Edit it to customize command replies, teleport notices, and login messages using MiniMessage tags such as `<gold>Welcome</gold>`. Keep placeholders such as `<name>` and `<player>` where you want QuickStart to insert their values. Missing entries use the bundled defaults.
 
 ## Storage and plugin API
 

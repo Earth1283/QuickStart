@@ -1,0 +1,119 @@
+# Customize QuickStart messages with MiniMessage tags, such as <gold> or <bold>.
+# Placeholders like <name> and <player> are filled in by QuickStart. Each
+# message supports the placeholders shown in its default value.
+# Omitted entries use the bundled defaults. Run /qs reload to apply edits.
+
+common:
+  player-only: "<red>This command is only available to players.</red>"
+  no-permission: "<red>You do not have permission.</red>"
+  invalid-name: "<red>Use 1–<limit> letters, numbers, underscores or hyphens for the name.</red>"
+  session-starting: "<yellow>Your QuickStart session is still starting.</yellow>"
+  command-queue-full: "<yellow>Too many QuickStart commands are pending.</yellow>"
+  starting: "<yellow>QuickStart is still starting. Try again shortly.</yellow>"
+  unavailable: "<red>QuickStart is unavailable. Ask an administrator to run /qs doctor.</red>"
+  connection-inactive: "<red>The player connection is no longer active</red>"
+  operation-unavailable: "<red><detail></red>"
+  storage-failure: "<red><detail></red>"
+  operation-failed: "<red>QuickStart could not complete the operation. See the server log.</red>"
+
+usage:
+  qs: "<yellow>Usage: /qs [help|modules|doctor|diagnostics startup|reload]</yellow>"
+  no-arguments: "<yellow>Usage: /<command></yellow>"
+  optional-name: "<yellow>Usage: /<command> [name]</yellow>"
+  required-name: '<yellow>Usage: /<command> \<name></yellow>'
+  required-player: '<yellow>Usage: /<command> \<player></yellow>'
+  optional-player: "<yellow>Usage: /<command> [player]</yellow>"
+
+login:
+  starting: "<yellow>QuickStart is still starting. Please try again shortly.</yellow>"
+  failed: "<red>QuickStart startup failed. Contact a server administrator.</red>"
+
+homes:
+  saved: "<green>Home '<name>' saved.</green>"
+  updated: "<green>Home '<name>' updated.</green>"
+  deleted: "<green>Home '<name>' deleted.</green>"
+  teleported: "<green>Teleported to home '<name>'.</green>"
+  not-found: "<red>Home '<name>' was not found.</red>"
+  limit: "<yellow>You have reached your limit of <limit> homes.</yellow>"
+  list: "<aqua>Homes: <names></aqua>"
+  empty: "<yellow>You have no saved homes.</yellow>"
+
+warps:
+  saved: "<green>Warp '<name>' saved.</green>"
+  updated: "<green>Warp '<name>' updated.</green>"
+  deleted: "<green>Warp '<name>' deleted.</green>"
+  teleported: "<green>Teleported to warp '<name>'.</green>"
+  not-found: "<red>Warp '<name>' was not found.</red>"
+  list: "<aqua>Warps: <names></aqua>"
+  empty: "<yellow>No warps are available.</yellow>"
+
+spawn:
+  saved: "<green>Server spawn saved.</green>"
+  teleported: "<green>Teleported to spawn.</green>"
+  unavailable: "<red>Server spawn is unavailable.</red>"
+
+back:
+  teleported: "<green>Returned to your previous location.</green>"
+  unavailable: "<yellow>No previous location is available.</yellow>"
+
+requests:
+  incoming: "<aqua><player> asked to teleport to you. /tpaccept <player> or /tpdeny <player></aqua>"
+  incoming-here: "<aqua><player> asked you to teleport to them. /tpaccept <player> or /tpdeny <player></aqua>"
+  sent: "<green>Teleport request sent to <player>.</green>"
+  cooldown: "<yellow>Please wait before sending another teleport request.</yellow>"
+  player-unavailable: "<red>That player is unavailable.</red>"
+  self: "<red>You cannot request a teleport with yourself.</red>"
+  no-match: "<yellow>You have no matching teleport request.</yellow>"
+  denied: "<yellow>Teleport request from <player> denied.</yellow>"
+  denied-notice: "<yellow><player> denied your teleport request.</yellow>"
+  completed: "<green>Teleport request from <player> completed.</green>"
+  accepted-notice: "<green><player> accepted your teleport request.</green>"
+
+teleport:
+  cancelled: "<red>The teleport was cancelled.</red>"
+  cooldown: "<yellow>Please wait for your teleport cooldown to expire.</yellow>"
+  in-progress: "<yellow>A teleport is already in progress.</yellow>"
+  world-unavailable: "<red>The destination world is unavailable.</red>"
+  disconnected: "<red>A player involved in the teleport disconnected.</red>"
+
+help:
+  heading: "<gold>QuickStart commands</gold>"
+  commands: "<aqua><commands></aqua>"
+  admin-commands: "<aqua>/qs modules  /qs doctor  /qs diagnostics startup  /qs reload</aqua>"
+
+modules:
+  line: "<module>: <state> (required: <required>, optional: <optional>)"
+
+diagnostics:
+  bootstrap: "Bootstrap: <time>"
+  critical: "Critical initialization: <time>"
+  ready: "Application ready after: <time>"
+  warmup: "Background warmup: <time>"
+  first-player: "First player feature ready after: <time>"
+  elapsed: "<millis> ms"
+  pending: "pending or unused"
+  module: "<module>: <state> in <millis> ms"
+  module-failed: "<summary> (<detail>)"
+  latency: "<count> operations, <mean> µs mean, <max> µs max"
+  no-operations: "no operations recorded"
+
+doctor:
+  readiness: "QuickStart <state> (<strategy>)"
+  config-valid: "Configuration valid."
+  config-error: "<red>Configuration error: <detail></red>"
+  message-error: "<red>message.yml error: <detail></red>"
+  startup-failure: "<red>Startup failure: <detail></red>"
+  sqlite-healthy: "SQLite read check passed. <timings>."
+  sqlite-health-failed: "<red>SQLite health check failed: <detail></red>"
+  sqlite-last-failure: "<yellow>Last SQLite failure (<time>, <operation>): <detail></yellow>"
+  sqlite-disabled: "SQLite is disabled because no enabled feature needs it."
+  sqlite-state: "SQLite state: <state>."
+  module-failed: "<red><module>: <detail></red>"
+  commands: "Feature commands: <timings>."
+
+reload:
+  success: "<green>Reloaded home, warp, spawn and teleportation settings.</green>"
+  restart-required: "<yellow>Restart required to apply <settings>.</yellow>"
+  invalid-config: "<red>Settings were kept. <detail></red>"
+  invalid-messages: "<red>Settings were kept. Could not load message.yml: <detail></red>"
+  startup-failed: "<red>QuickStart failed to start. Fix config.yml and restart the server.</red>"

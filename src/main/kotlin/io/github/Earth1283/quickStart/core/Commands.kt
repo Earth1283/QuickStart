@@ -4,9 +4,12 @@ import io.github.Earth1283.quickStart.platform.EntityUnavailable
 import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.ServerScheduler
 import io.github.Earth1283.quickStart.platform.TeleportResult
+import net.kyori.adventure.text.Component
 import org.bukkit.command.CommandSender
 
-internal class CommandProblem(message: String) : IllegalArgumentException(message)
+internal class CommandProblem(key: String, vararg placeholders: Pair<String, Any>) : IllegalArgumentException(key) {
+    val notice = Message(key, *placeholders)
+}
 
 internal enum class CommandArgument { NONE, OPTIONAL_HOME, REQUIRED_WARP, REQUIRED_PLAYER, OPTIONAL_PLAYER }
 
@@ -33,24 +36,24 @@ internal enum class FeatureCommand(val id: String, val module: String, val argum
         val value = args.singleOrNull()
         return when (argument) {
             CommandArgument.NONE -> {
-                if (args.isNotEmpty()) throw CommandProblem("Usage: /$id")
+                if (args.isNotEmpty()) throw CommandProblem("usage.no-arguments", "command" to id)
                 null
             }
             CommandArgument.OPTIONAL_HOME -> {
-                if (args.size > 1) throw CommandProblem("Usage: /$id [name]")
+                if (args.size > 1) throw CommandProblem("usage.optional-name", "command" to id)
                 destinationName(value ?: "home", nameMaxLength)
             }
-            CommandArgument.REQUIRED_WARP -> destinationName(value ?: throw CommandProblem("Usage: /$id <name>"), nameMaxLength)
-            CommandArgument.REQUIRED_PLAYER -> value ?: throw CommandProblem("Usage: /$id <player>")
+            CommandArgument.REQUIRED_WARP -> destinationName(value ?: throw CommandProblem("usage.required-name", "command" to id), nameMaxLength)
+            CommandArgument.REQUIRED_PLAYER -> value ?: throw CommandProblem("usage.required-player", "command" to id)
             CommandArgument.OPTIONAL_PLAYER -> {
-                if (args.size > 1) throw CommandProblem("Usage: /$id [player]")
+                if (args.size > 1) throw CommandProblem("usage.optional-player", "command" to id)
                 value
             }
         }
     }
 
     private fun destinationName(value: String, maxLength: Int) = DestinationNames.normalize(value, maxLength)
-        ?: throw CommandProblem("Use 1–$maxLength letters, numbers, underscores or hyphens for the name.")
+        ?: throw CommandProblem("common.invalid-name", "limit" to maxLength)
 
     companion object {
         val byId = entries.associateBy(FeatureCommand::id)
@@ -61,12 +64,20 @@ internal class CommandActor(
     private val sender: CommandSender,
     val session: PlayerSession?,
     private val scheduler: ServerScheduler,
+    private val messages: () -> Messages,
 ) {
-    fun player(): PlayerSession = session ?: throw CommandProblem("This command is only available to players.")
+    fun player(): PlayerSession = session ?: throw CommandProblem("common.player-only")
 
-    suspend fun reply(vararg messages: String) {
+    fun render(message: Message): Component = messages().render(message)
+
+    suspend fun reply(key: String, vararg placeholders: Pair<String, Any>) = reply(Message(key, *placeholders))
+
+    suspend fun reply(message: Message) = reply(listOf(message))
+
+    suspend fun reply(notices: List<Message>) {
+        val catalog = messages()
         try {
-            onOwner { messages.forEach(sender::sendMessage) }
+            onOwner { notices.forEach { sender.sendMessage(catalog.render(it)) } }
         } catch (_: EntityUnavailable) {
         }
     }
@@ -88,14 +99,15 @@ internal data class FeatureCall(
 ) {
     fun name(): String = checkNotNull(argument)
 
-    suspend fun teleportResult(result: TeleportResult, success: String) = actor.reply(result.failureMessage ?: success)
+    suspend fun teleportResult(result: TeleportResult, success: String, vararg placeholders: Pair<String, Any>) =
+        actor.reply(result.failureMessage ?: Message(success, *placeholders))
 }
 
 internal interface CommandModule : RuntimeModule {
     suspend fun execute(call: FeatureCall)
 }
 
-internal suspend fun replyWithNames(actor: CommandActor, names: List<String>, label: String, empty: String) {
+internal suspend fun replyWithNames(actor: CommandActor, names: List<String>, list: String, empty: String) {
     if (names.isEmpty()) actor.reply(empty)
-    else actor.reply(*names.chunked(10).map { "$label: ${it.joinToString(", ")}" }.toTypedArray())
+    else actor.reply(names.chunked(10).map { Message(list, "names" to it.joinToString(", ")) })
 }

@@ -27,7 +27,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import net.kyori.adventure.text.Component
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.command.TabExecutor
@@ -53,6 +52,8 @@ internal class QuickStartRuntime(
     private val configurationFailure: Throwable?,
     enabledAt: TimeSource.Monotonic.ValueTimeMark,
 ) : QuickStartApi, Listener, TabExecutor {
+    private data class ReloadableSettings(val features: FeatureSettings, val messages: Messages)
+
     private val lifecycle = SupervisorJob()
     private val scope = CoroutineScope(lifecycle + Dispatchers.Default)
     private val scheduler = ServerScheduler(plugin)
@@ -66,8 +67,14 @@ internal class QuickStartRuntime(
     private val bootFinished = CompletableDeferred<Readiness>()
     private val state = AtomicReference(Readiness.STARTING)
     private val reloadLock = Mutex()
-    @Volatile private var features = config.features
+    private val messageFile = File(plugin.dataFolder, "message.yml")
+    private val defaultMessages = checkNotNull(plugin.getResource(messageFile.name))
+        .reader(Charsets.UTF_8).use(Messages::loadDefaults)
+    @Volatile private var settings = ReloadableSettings(config.features, defaultMessages)
+    private val features get() = settings.features
+    private val messages get() = settings.messages
     @Volatile private var configProblem = configurationFailure?.let(::message)
+    @Volatile private var messageProblem: String? = null
     @Volatile private var startupProblem: String? = null
     internal val startup = StartupMeasurements(enabledAt)
     internal val commands = LatencyMeasurements()
@@ -98,6 +105,16 @@ internal class QuickStartRuntime(
     }
 
     fun start() {
+        try {
+            if (messageFile.exists()) {
+                settings = settings.copy(messages = defaultMessages.withOverrides(messageFile))
+            } else {
+                plugin.saveResource(messageFile.name, false)
+            }
+        } catch (failure: Exception) {
+            messageProblem = message(failure)
+            plugin.logger.log(Level.WARNING, "Could not load message.yml. Using default messages.", failure)
+        }
         val server = plugin.server
         server.pluginManager.registerEvents(this, plugin)
         if (backHistory != null) {
@@ -195,9 +212,8 @@ internal class QuickStartRuntime(
         if (config.startup != StartupStrategy.ALL_AT_ONCE || readiness == Readiness.READY ||
             event.loginResult != AsyncPlayerPreLoginEvent.Result.ALLOWED
         ) return
-        val notice = if (readiness == Readiness.FAILED) "QuickStart startup failed. Contact a server administrator."
-        else "QuickStart is still starting. Please try again shortly."
-        event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text(notice))
+        val key = if (readiness == Readiness.FAILED) "login.failed" else "login.starting"
+        event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, messages.render(Message(key)))
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -239,7 +255,7 @@ internal class QuickStartRuntime(
     private var backListener: BackListener? = null
 
     private suspend fun spawnTeleport(session: PlayerSession) {
-        val actor = CommandActor(session.player, session, scheduler)
+        val actor = CommandActor(session.player, session, scheduler) { messages }
         handleErrors(actor) {
             val boot = bootFinished.await()
             if (boot != Readiness.READY && boot != Readiness.DEGRADED) return@handleErrors
@@ -255,10 +271,10 @@ internal class QuickStartRuntime(
         val player = sender as? Player
         val session = player?.let(players::session)
         if (player != null && session == null) {
-            sender.sendMessage("Your QuickStart session is still starting.")
+            sender.sendMessage(messages.render(Message("common.session-starting")))
             return true
         }
-        val actor = CommandActor(sender, session, scheduler)
+        val actor = CommandActor(sender, session, scheduler) { messages }
         val action: suspend () -> Unit = {
             val started = TimeSource.Monotonic.markNow()
             try {
@@ -271,11 +287,12 @@ internal class QuickStartRuntime(
             }
         }
         if (session == null) scope.launch { action() }
-        else if (!session.submit(action)) sender.sendMessage("Too many QuickStart commands are pending.")
+        else if (!session.submit(action)) sender.sendMessage(messages.render(Message("common.command-queue-full")))
         return true
     }
 
     private suspend fun executeFeature(actor: CommandActor, feature: FeatureCommand, args: Array<out String>) {
+        val features = this.features
         val nameMaxLength = when (feature.module) {
             "homes" -> features.homeNameMaxLength
             "warps" -> features.warpNameMaxLength
@@ -285,8 +302,8 @@ internal class QuickStartRuntime(
         if (feature.playerOnly) actor.player()
         when (readiness) {
             Readiness.READY, Readiness.DEGRADED -> Unit
-            Readiness.STARTING -> throw CommandProblem("QuickStart is still starting. Try again shortly.")
-            else -> throw CommandProblem("QuickStart is unavailable. Ask an administrator to run /qs doctor.")
+            Readiness.STARTING -> throw CommandProblem("common.starting")
+            else -> throw CommandProblem("common.unavailable")
         }
         modules.withModule(feature.module) { module ->
             if (actor.session != null) startup.recordFirstPlayerReady()
@@ -305,18 +322,27 @@ internal class QuickStartRuntime(
         }
     }
 
-    suspend fun reload(): List<String> = reloadLock.withLock {
-        if (configurationFailure != null) throw CommandProblem("QuickStart failed to start. Fix config.yml and restart the server.")
+    suspend fun reload(): List<Message> = reloadLock.withLock {
+        if (configurationFailure != null) throw CommandProblem("reload.startup-failed")
         val replacement = try {
             scheduler.blocking { Configuration.load(configFile) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             configProblem = message(failure)
-            throw CommandProblem("Settings were kept. ${message(failure)}")
+            throw CommandProblem("reload.invalid-config", "detail" to message(failure))
         }
-        features = replacement.features
         configProblem = null
+        val replacementMessages = try {
+            scheduler.blocking { defaultMessages.withOverrides(messageFile) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            messageProblem = message(failure)
+            throw CommandProblem("reload.invalid-messages", "detail" to message(failure))
+        }
+        messageProblem = null
+        settings = ReloadableSettings(replacement.features, replacementMessages)
         val restart = buildList {
             if (config.startup != replacement.startup) add("startup")
             if (config.enabledModules != replacement.enabledModules) add("modules")
@@ -324,15 +350,16 @@ internal class QuickStartRuntime(
             if (config.maxPendingOperations != replacement.maxPendingOperations) add("storage.max-pending-operations")
         }
         buildList {
-            add("Reloaded home, warp, spawn and teleportation settings.")
-            if (restart.isNotEmpty()) add("Restart required to apply ${restart.joinToString()}.")
+            add(Message("reload.success"))
+            if (restart.isNotEmpty()) add(Message("reload.restart-required", "settings" to restart.joinToString()))
         }
     }
 
-    suspend fun doctor(): List<String> = buildList {
-        add("QuickStart ${readiness.name.lowercase(Locale.ROOT)} (${config.startup})")
-        add(configProblem?.let { "Configuration error: $it" } ?: "Configuration valid.")
-        startupProblem?.let { add("Startup failure: $it") }
+    suspend fun doctor(): List<Message> = buildList {
+        add(Message("doctor.readiness", "state" to readiness.name.lowercase(Locale.ROOT), "strategy" to config.startup))
+        add(configProblem?.let { Message("doctor.config-error", "detail" to it) } ?: Message("doctor.config-valid"))
+        messageProblem?.let { add(Message("doctor.message-error", "detail" to it)) }
+        startupProblem?.let { add(Message("doctor.startup-failure", "detail" to it)) }
         val statuses = modules()
         val storageStatus = statuses.first { it.id == "storage" }
         when (storageStatus.state) {
@@ -341,17 +368,21 @@ internal class QuickStartRuntime(
                 val previous = storage.lastFailure
                 try {
                     storage.health()
-                    add("SQLite read check passed. ${storage.timings.describe()}.")
+                    add(Message("doctor.sqlite-healthy", "timings" to storage.timings.describe()))
                 } catch (failure: StorageFailure) {
-                    add("SQLite health check failed: ${message(failure)}")
+                    add(Message("doctor.sqlite-health-failed", "detail" to message(failure)))
                 }
-                previous?.let { add("Last SQLite failure (${it.at}, ${it.operation}): ${it.reason}") }
+                previous?.let {
+                    add(Message("doctor.sqlite-last-failure", "time" to it.at, "operation" to it.operation, "detail" to it.reason))
+                }
             }
-            ModuleState.DISABLED -> add("SQLite is disabled because no enabled feature needs it.")
-            else -> add("SQLite state: ${storageStatus.state.name.lowercase(Locale.ROOT)}.")
+            ModuleState.DISABLED -> add(Message("doctor.sqlite-disabled"))
+            else -> add(Message("doctor.sqlite-state", "state" to storageStatus.state.name.lowercase(Locale.ROOT)))
         }
-        statuses.filter { it.failure != null }.forEach { add("${it.id}: ${it.failure}") }
-        add("Feature commands: ${commands.describe()}.")
+        statuses.forEach { module ->
+            module.failure?.let { add(Message("doctor.module-failed", "module" to module.id, "detail" to it)) }
+        }
+        add(Message("doctor.commands", "timings" to commands.describe()))
     }
 
     private suspend fun handleErrors(actor: CommandActor, action: suspend () -> Unit) {
@@ -360,16 +391,16 @@ internal class QuickStartRuntime(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: CommandProblem) {
-            actor.reply(message(failure))
+            actor.reply(failure.notice)
         } catch (failure: ModuleUnavailable) {
-            actor.reply(message(failure))
+            actor.reply("common.operation-unavailable", "detail" to message(failure))
         } catch (failure: StorageFailure) {
-            actor.reply(message(failure))
-        } catch (failure: EntityUnavailable) {
-            actor.reply(message(failure))
+            actor.reply("common.storage-failure", "detail" to message(failure))
+        } catch (_: EntityUnavailable) {
+            actor.reply("common.connection-inactive")
         } catch (failure: Exception) {
             report("Command", failure)
-            actor.reply("QuickStart could not complete the operation. See the server log.")
+            actor.reply("common.operation-failed")
         }
     }
 

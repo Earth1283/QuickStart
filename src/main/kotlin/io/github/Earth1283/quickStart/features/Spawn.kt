@@ -4,6 +4,7 @@ import io.github.Earth1283.quickStart.core.CommandModule
 import io.github.Earth1283.quickStart.core.DestinationGroup
 import io.github.Earth1283.quickStart.core.FeatureCall
 import io.github.Earth1283.quickStart.core.FeatureCommand
+import io.github.Earth1283.quickStart.core.Message
 import io.github.Earth1283.quickStart.core.SqliteStorage
 import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.ServerScheduler
@@ -24,20 +25,21 @@ internal class Spawn(
         when (call.command) {
             FeatureCommand.SETSPAWN -> {
                 storage.save(spawn, "spawn", teleports.position(player))
-                call.actor.reply("Server spawn saved.")
+                call.actor.reply("spawn.saved")
             }
             FeatureCommand.SPAWN -> {
                 val position = storage.get(spawn, "spawn") ?: scheduler.global {
                     server.worlds.firstOrNull()?.spawnLocation?.snapshot()
                 }
-                if (position == null) return call.actor.reply("Server spawn is unavailable.")
-                call.teleportResult(teleports.move(player, position, call.settings.spawnCooldownSeconds.takeIf { it > 0 }), "Teleported to spawn.")
+                if (position == null) return call.actor.reply("spawn.unavailable")
+                val result = teleports.move(player, position, call.settings.spawnCooldownSeconds.takeIf { it > 0 })
+                call.teleportResult(result, "spawn.teleported")
             }
             else -> error("Unsupported spawn command ${call.command.id}")
         }
     }
 
-    suspend fun placeFirstJoin(player: PlayerSession): String? {
+    suspend fun placeFirstJoin(player: PlayerSession): Message? {
         val position = storage.get(spawn, "spawn") ?: return null
         return teleports.move(player, position).failureMessage
     }

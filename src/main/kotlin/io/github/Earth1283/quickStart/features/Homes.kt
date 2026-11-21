@@ -19,25 +19,26 @@ internal class Homes(private val storage: SqliteStorage, private val teleports: 
                 val name = call.name()
                 val limit = call.settings.homeLimit
                 val result = storage.save(homes, name, teleports.position(player), limit)
-                actor.reply(when (result) {
-                    SaveResult.CREATED -> "Home '$name' saved."
-                    SaveResult.UPDATED -> "Home '$name' updated."
-                    SaveResult.LIMIT_REACHED -> "You have reached your limit of $limit homes."
-                })
+                when (result) {
+                    SaveResult.CREATED -> actor.reply("homes.saved", "name" to name)
+                    SaveResult.UPDATED -> actor.reply("homes.updated", "name" to name)
+                    SaveResult.LIMIT_REACHED -> actor.reply("homes.limit", "limit" to limit)
+                }
             }
             FeatureCommand.HOME -> {
                 val name = call.name()
-                val position = storage.get(homes, name) ?: return actor.reply("Home '$name' was not found.")
-                call.teleportResult(teleports.move(player, position, call.settings.homeCooldownSeconds.takeIf { it > 0 }), "Teleported to home '$name'.")
+                val position = storage.get(homes, name) ?: return actor.reply("homes.not-found", "name" to name)
+                val result = teleports.move(player, position, call.settings.homeCooldownSeconds.takeIf { it > 0 })
+                call.teleportResult(result, "homes.teleported", "name" to name)
             }
             FeatureCommand.DELHOME -> {
                 val name = call.name()
                 val removed = storage.delete(homes, name)
-                actor.reply(if (removed) "Home '$name' deleted." else "Home '$name' was not found.")
+                actor.reply(if (removed) "homes.deleted" else "homes.not-found", "name" to name)
             }
             FeatureCommand.HOMES -> {
                 val names = storage.names(homes)
-                replyWithNames(actor, names, "Homes", "You have no saved homes.")
+                replyWithNames(actor, names, "homes.list", "homes.empty")
             }
             else -> error("Unsupported homes command ${call.command.id}")
         }

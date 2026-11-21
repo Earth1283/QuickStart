@@ -18,26 +18,27 @@ internal class Warps(private val storage: SqliteStorage, private val teleports: 
             FeatureCommand.SETWARP -> {
                 val name = call.name()
                 val result = storage.save(warps, name, teleports.position(actor.player()))
-                actor.reply(if (result == SaveResult.UPDATED) "Warp '$name' updated." else "Warp '$name' saved.")
+                actor.reply(if (result == SaveResult.UPDATED) "warps.updated" else "warps.saved", "name" to name)
             }
             FeatureCommand.WARP -> {
                 val name = call.name()
                 val visible = !call.settings.perWarpPermissions || actor.onOwner { canUse(it, name) }
                 val position = if (visible) storage.get(warps, name) else null
-                if (position == null) return actor.reply("Warp '$name' was not found.")
-                call.teleportResult(teleports.move(actor.player(), position, call.settings.warpCooldownSeconds.takeIf { it > 0 }), "Teleported to warp '$name'.")
+                if (position == null) return actor.reply("warps.not-found", "name" to name)
+                val result = teleports.move(actor.player(), position, call.settings.warpCooldownSeconds.takeIf { it > 0 })
+                call.teleportResult(result, "warps.teleported", "name" to name)
             }
             FeatureCommand.DELWARP -> {
                 val name = call.name()
                 val removed = storage.delete(warps, name)
-                actor.reply(if (removed) "Warp '$name' deleted." else "Warp '$name' was not found.")
+                actor.reply(if (removed) "warps.deleted" else "warps.not-found", "name" to name)
             }
             FeatureCommand.WARPS -> {
                 val names = storage.names(warps)
                 val visible = if (call.settings.perWarpPermissions) {
                     actor.onOwner { sender -> names.filter { canUse(sender, it) } }
                 } else names
-                replyWithNames(actor, visible, "Warps", "No warps are available.")
+                replyWithNames(actor, visible, "warps.list", "warps.empty")
             }
             else -> error("Unsupported warps command ${call.command.id}")
         }

@@ -13,31 +13,34 @@ internal class Administration(private val runtime: QuickStartRuntime) {
                 commands.filter { sender.hasPermission(permission(it)) }.map { "/${it.id}" }
             }
             val lines = buildList {
-                add("QuickStart commands")
-                if (available.isNotEmpty()) add(available.joinToString("  "))
-                if (admin) add("/qs modules  /qs doctor  /qs diagnostics startup  /qs reload")
+                add(Message("help.heading"))
+                if (available.isNotEmpty()) add(Message("help.commands", "commands" to available.joinToString("  ")))
+                if (admin) add(Message("help.admin-commands"))
             }
-            actor.reply(*lines.toTypedArray())
+            actor.reply(lines)
             return
         }
-        if (!actor.onOwner { it.hasPermission("quickstart.admin") }) throw CommandProblem("You do not have permission.")
+        if (!actor.onOwner { it.hasPermission("quickstart.admin") }) throw CommandProblem("common.no-permission")
         val lines = when (words) {
             listOf("modules") -> runtime.modules().map { module ->
                 val required = module.requiredDependencies.joinToString().ifEmpty { "none" }
                 val optional = module.optionalDependencies.joinToString().ifEmpty { "none" }
-                "${module.id}: ${module.state.name.lowercase(Locale.ROOT)} (required: $required, optional: $optional)"
+                Message("modules.line", "module" to module.id, "state" to module.state.name.lowercase(Locale.ROOT),
+                    "required" to required, "optional" to optional)
             }
             listOf("doctor") -> runtime.doctor()
             listOf("diagnostics", "startup") -> runtime.startup.lines() + runtime.modules().mapNotNull { module ->
                 module.elapsedMillis?.let { elapsed ->
-                    val summary = "${module.id}: ${module.state.name.lowercase(Locale.ROOT)} in $elapsed ms"
-                    module.failure?.let { "$summary ($it)" } ?: summary
+                    val summary = Message("diagnostics.module", "module" to module.id,
+                        "state" to module.state.name.lowercase(Locale.ROOT), "millis" to elapsed)
+                    module.failure?.let { Message("diagnostics.module-failed", "summary" to summary, "detail" to it) }
+                        ?: summary
                 }
             }
             listOf("reload") -> runtime.reload()
-            else -> throw CommandProblem("Usage: /qs [help|modules|doctor|diagnostics startup|reload]")
+            else -> throw CommandProblem("usage.qs")
         }
-        actor.reply(*lines.toTypedArray())
+        actor.reply(lines)
     }
 
     fun complete(sender: CommandSender, args: Array<out String>): List<String> {

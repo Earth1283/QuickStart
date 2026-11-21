@@ -4,6 +4,7 @@ import io.github.Earth1283.quickStart.core.CommandModule
 import io.github.Earth1283.quickStart.core.CommandProblem
 import io.github.Earth1283.quickStart.core.FeatureCall
 import io.github.Earth1283.quickStart.core.FeatureCommand
+import io.github.Earth1283.quickStart.core.Message
 import io.github.Earth1283.quickStart.platform.BackHistory
 import io.github.Earth1283.quickStart.platform.EntityUnavailable
 import io.github.Earth1283.quickStart.platform.PlayerSession
@@ -11,6 +12,7 @@ import io.github.Earth1283.quickStart.platform.Players
 import io.github.Earth1283.quickStart.platform.ServerScheduler
 import io.github.Earth1283.quickStart.platform.TeleportResult
 import io.github.Earth1283.quickStart.platform.Teleports
+import net.kyori.adventure.text.Component
 
 internal class Teleportation(
     private val players: Players,
@@ -36,47 +38,47 @@ internal class Teleportation(
             FeatureCommand.TPA, FeatureCommand.TPAHERE -> send(call, player)
             FeatureCommand.TPACCEPT, FeatureCommand.TPDENY -> respond(call, player)
             FeatureCommand.BACK -> {
-                val position = backHistory.get(player) ?: return call.actor.reply("No previous location is available.")
+                val position = backHistory.get(player) ?: return call.actor.reply("back.unavailable")
                 val result = teleports.move(player, position, call.settings.teleportCooldownSeconds)
-                call.teleportResult(result, "Returned to your previous location.")
+                call.teleportResult(result, "back.teleported")
             }
             else -> error("Unsupported teleportation command ${call.command.id}")
         }
     }
 
     private suspend fun send(call: FeatureCall, from: PlayerSession) {
-        val target = players.find(call.name()) ?: throw CommandProblem("That player is unavailable.")
-        if (from === target) throw CommandProblem("You cannot request a teleport with yourself.")
+        val target = players.find(call.name()) ?: throw CommandProblem("requests.player-unavailable")
+        if (from === target) throw CommandProblem("requests.self")
         val bringHere = call.command == FeatureCommand.TPAHERE
         val status = try {
             scheduler.entity(target.player) {
                 target.requireActive()
-                if (!target.player.hasPermission("quickstart.tpa")) throw CommandProblem("That player is unavailable.")
+                if (!target.player.hasPermission("quickstart.tpa")) throw CommandProblem("requests.player-unavailable")
                 requests.send(from, target, bringHere, call.settings.teleportCooldownSeconds, call.settings.requestExpirationSeconds)
                     .also { result ->
                         if (result == RequestStatus.SENT) {
-                            val action = if (bringHere) "asked you to teleport to them" else "asked to teleport to you"
-                            target.player.sendMessage("${from.name} $action. /tpaccept ${from.name} or /tpdeny ${from.name}")
+                            val key = if (bringHere) "requests.incoming-here" else "requests.incoming"
+                            target.player.sendMessage(call.actor.render(Message(key, "player" to from.name)))
                         }
                     }
             }
         } catch (_: EntityUnavailable) {
             RequestStatus.DISCONNECTED
         }
-        call.actor.reply(when (status) {
-            RequestStatus.SENT -> "Teleport request sent to ${target.name}."
-            RequestStatus.COOLDOWN -> "Please wait before sending another teleport request."
-            RequestStatus.DISCONNECTED -> "That player is unavailable."
-        })
+        when (status) {
+            RequestStatus.SENT -> call.actor.reply("requests.sent", "player" to target.name)
+            RequestStatus.COOLDOWN -> call.actor.reply("requests.cooldown")
+            RequestStatus.DISCONNECTED -> call.actor.reply("requests.player-unavailable")
+        }
     }
 
     private suspend fun respond(call: FeatureCall, player: PlayerSession) {
         val sender = call.argument
         val request = requests.take(player) { sender == null || it.name.equals(sender, ignoreCase = true) }
-            ?: return call.actor.reply("You have no matching teleport request.")
+            ?: return call.actor.reply("requests.no-match")
         if (call.command == FeatureCommand.TPDENY) {
-            call.actor.reply("Teleport request from ${request.from.name} denied.")
-            notify(request.from, "${player.name} denied your teleport request.")
+            call.actor.reply("requests.denied", "player" to request.from.name)
+            notify(request.from, call.actor.render(Message("requests.denied-notice", "player" to player.name)))
             return
         }
         val mover = if (request.bringHere) player else request.from
@@ -87,11 +89,12 @@ internal class Teleportation(
         } catch (_: EntityUnavailable) {
             TeleportResult.DISCONNECTED
         }
-        call.teleportResult(result, "Teleport request from ${request.from.name} completed.")
-        notify(request.from, result.failureMessage ?: "${player.name} accepted your teleport request.")
+        call.teleportResult(result, "requests.completed", "player" to request.from.name)
+        val notice = result.failureMessage ?: Message("requests.accepted-notice", "player" to player.name)
+        notify(request.from, call.actor.render(notice))
     }
 
-    private suspend fun notify(session: PlayerSession, message: String) {
+    private suspend fun notify(session: PlayerSession, message: Component) {
         try {
             scheduler.entity(session.player) {
                 session.requireActive()

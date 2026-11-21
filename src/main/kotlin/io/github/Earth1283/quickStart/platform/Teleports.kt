@@ -1,5 +1,6 @@
 package io.github.Earth1283.quickStart.platform
 
+import io.github.Earth1283.quickStart.core.Message
 import io.github.Earth1283.quickStart.core.Position
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
@@ -8,13 +9,13 @@ import org.bukkit.Location
 import org.bukkit.Server
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause
 
-internal enum class TeleportResult(val failureMessage: String?) {
+internal enum class TeleportResult(val failureMessage: Message?) {
     SUCCESS(null),
-    CANCELLED("The teleport was cancelled."),
-    COOLDOWN("Please wait for your teleport cooldown to expire."),
-    IN_PROGRESS("A teleport is already in progress."),
-    WORLD_UNAVAILABLE("The destination world is unavailable."),
-    DISCONNECTED("A player involved in the teleport disconnected."),
+    CANCELLED(Message("teleport.cancelled")),
+    COOLDOWN(Message("teleport.cooldown")),
+    IN_PROGRESS(Message("teleport.in-progress")),
+    WORLD_UNAVAILABLE(Message("teleport.world-unavailable")),
+    DISCONNECTED(Message("teleport.disconnected")),
 }
 
 internal class Teleports(

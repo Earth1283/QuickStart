@@ -18,15 +18,16 @@ internal class StartupMeasurements(private val enabledAt: TimeSource.Monotonic.V
         firstPlayerReady.compareAndSet(-1, elapsedMillis())
     }
 
-    fun lines(): List<String> = listOf(
-        "Bootstrap: ${display(bootstrapMillis)}",
-        "Critical initialization: ${display(criticalMillis)}",
-        "Application ready after: ${display(readinessMillis)}",
-        "Background warmup: ${display(warmupMillis)}",
-        "First player feature ready after: ${display(firstPlayerReady.get().takeIf { it >= 0 })}",
+    fun lines(): List<Message> = listOf(
+        Message("diagnostics.bootstrap", "time" to display(bootstrapMillis)),
+        Message("diagnostics.critical", "time" to display(criticalMillis)),
+        Message("diagnostics.ready", "time" to display(readinessMillis)),
+        Message("diagnostics.warmup", "time" to display(warmupMillis)),
+        Message("diagnostics.first-player", "time" to display(firstPlayerReady.get().takeIf { it >= 0 })),
     )
 
-    private fun display(millis: Long?): String = millis?.let { "$it ms" } ?: "pending or unused"
+    private fun display(millis: Long?): Message =
+        if (millis == null) Message("diagnostics.pending") else Message("diagnostics.elapsed", "millis" to millis)
 }
 
 internal class LatencyMeasurements {
@@ -40,9 +41,10 @@ internal class LatencyMeasurements {
         calls.increment()
     }
 
-    fun describe(): String {
+    fun describe(): Message {
         val count = calls.sum()
-        if (count == 0L) return "no operations recorded"
-        return "$count operations, ${totalNanos.sum() / count / 1000} µs mean, ${maximumNanos.get() / 1000} µs max"
+        if (count == 0L) return Message("diagnostics.no-operations")
+        return Message("diagnostics.latency", "count" to count, "mean" to totalNanos.sum() / count / 1000,
+            "max" to maximumNanos.get() / 1000)
     }
 }
