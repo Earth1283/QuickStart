@@ -29,7 +29,7 @@ internal enum class FeatureCommand(val id: String, val module: String, val argum
 
     val playerOnly: Boolean get() = this != WARPS && this != DELWARP
 
-    fun parse(args: Array<out String>): String? {
+    fun parse(args: Array<out String>, nameMaxLength: Int = 32): String? {
         val value = args.singleOrNull()
         return when (argument) {
             CommandArgument.NONE -> {
@@ -38,9 +38,9 @@ internal enum class FeatureCommand(val id: String, val module: String, val argum
             }
             CommandArgument.OPTIONAL_HOME -> {
                 if (args.size > 1) throw CommandProblem("Usage: /$id [name]")
-                destinationName(value ?: "home")
+                destinationName(value ?: "home", nameMaxLength)
             }
-            CommandArgument.REQUIRED_WARP -> destinationName(value ?: throw CommandProblem("Usage: /$id <name>"))
+            CommandArgument.REQUIRED_WARP -> destinationName(value ?: throw CommandProblem("Usage: /$id <name>"), nameMaxLength)
             CommandArgument.REQUIRED_PLAYER -> value ?: throw CommandProblem("Usage: /$id <player>")
             CommandArgument.OPTIONAL_PLAYER -> {
                 if (args.size > 1) throw CommandProblem("Usage: /$id [player]")
@@ -49,8 +49,8 @@ internal enum class FeatureCommand(val id: String, val module: String, val argum
         }
     }
 
-    private fun destinationName(value: String) = DestinationNames.normalize(value)
-        ?: throw CommandProblem("Use 1–32 letters, numbers, underscores or hyphens for the name.")
+    private fun destinationName(value: String, maxLength: Int) = DestinationNames.normalize(value, maxLength)
+        ?: throw CommandProblem("Use 1–$maxLength letters, numbers, underscores or hyphens for the name.")
 
     companion object {
         val byId = entries.associateBy(FeatureCommand::id)

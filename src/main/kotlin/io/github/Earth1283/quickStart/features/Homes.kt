@@ -28,7 +28,7 @@ internal class Homes(private val storage: SqliteStorage, private val teleports: 
             FeatureCommand.HOME -> {
                 val name = call.name()
                 val position = storage.get(homes, name) ?: return actor.reply("Home '$name' was not found.")
-                call.teleportResult(teleports.move(player, position), "Teleported to home '$name'.")
+                call.teleportResult(teleports.move(player, position, call.settings.homeCooldownSeconds.takeIf { it > 0 }), "Teleported to home '$name'.")
             }
             FeatureCommand.DELHOME -> {
                 val name = call.name()

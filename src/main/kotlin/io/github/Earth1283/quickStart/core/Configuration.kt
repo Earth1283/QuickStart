@@ -8,10 +8,19 @@ internal enum class StartupStrategy { LAZY, ADHD, ALL_AT_ONCE }
 
 internal data class FeatureSettings(
     val homeLimit: Int,
+    val homeCooldownSeconds: Int,
+    val homeNameMaxLength: Int,
     val perWarpPermissions: Boolean,
+    val warpCooldownSeconds: Int,
+    val warpNameMaxLength: Int,
     val firstJoinSpawn: Boolean,
+    val spawnOnRespawn: Boolean,
+    val spawnOnJoin: Boolean,
+    val spawnCooldownSeconds: Int,
     val teleportCooldownSeconds: Int,
     val requestExpirationSeconds: Int,
+    val backOnDeath: Boolean,
+    val backOnTeleport: Boolean,
 )
 
 internal data class WarmupSettings(
@@ -33,6 +42,7 @@ internal data class Configuration(
     val enabledModules: Set<String>,
     val warmup: WarmupSettings,
     val features: FeatureSettings,
+    val maxPendingOperations: Int = 128,
 ) {
     companion object {
         val featureIds = listOf("teleportation", "homes", "warps", "spawn")
@@ -54,20 +64,33 @@ internal data class Configuration(
             if (warmup.activeServerWorkers > warmup.emptyServerWorkers) {
                 throw ConfigurationException("performance.warmup.active-server-workers must not exceed empty-server-workers")
             }
-            if (values.string("storage.backend", "sqlite") != "sqlite") {
+            val storageBackend = values.string("storage.backend", "sqlite")
+            if (storageBackend != "sqlite") {
                 throw ConfigurationException("storage.backend must be sqlite")
             }
+            val maxPendingOperations = values.integer("storage.max-pending-operations", 128, 8..4096)
             for (path in listOf("telemetry.enabled", "scope-creep.scripting.enabled")) {
                 if (values.boolean(path, false)) throw ConfigurationException("$path must be false in this version")
             }
+            val homeNameMaxLength = values.integer("homes.name-max-length", 32, 1..32)
+            val warpNameMaxLength = values.integer("warps.name-max-length", 32, 1..32)
             val features = FeatureSettings(
                 values.integer("homes.limit", 5, 1..1000),
+                values.integer("homes.cooldown-seconds", 0, 0..3600),
+                homeNameMaxLength,
                 values.boolean("warps.per-warp-permissions", false),
+                values.integer("warps.cooldown-seconds", 0, 0..3600),
+                warpNameMaxLength,
                 values.boolean("spawn.first-join", false),
+                values.boolean("spawn.on-respawn", false),
+                values.boolean("spawn.on-join", false),
+                values.integer("spawn.cooldown-seconds", 0, 0..3600),
                 values.integer("teleportation.cooldown-seconds", 5, 0..3600),
                 values.integer("teleportation.request-expiration-seconds", 60, 1..3600),
+                values.boolean("teleportation.back-on-death", true),
+                values.boolean("teleportation.back-on-teleport", true),
             )
-            return Configuration(strategy, modules, warmup, features)
+            return Configuration(strategy, modules, warmup, features, maxPendingOperations)
         }
     }
 }

@@ -25,7 +25,7 @@ internal class Warps(private val storage: SqliteStorage, private val teleports: 
                 val visible = !call.settings.perWarpPermissions || actor.onOwner { canUse(it, name) }
                 val position = if (visible) storage.get(warps, name) else null
                 if (position == null) return actor.reply("Warp '$name' was not found.")
-                call.teleportResult(teleports.move(actor.player(), position), "Teleported to warp '$name'.")
+                call.teleportResult(teleports.move(actor.player(), position, call.settings.warpCooldownSeconds.takeIf { it > 0 }), "Teleported to warp '$name'.")
             }
             FeatureCommand.DELWARP -> {
                 val name = call.name()

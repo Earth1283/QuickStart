@@ -4,9 +4,10 @@ import java.util.Locale
 import java.util.UUID
 
 internal object DestinationNames {
-    private val valid = Regex("[a-zA-Z0-9_-]{1,32}")
+    private val chars = Regex("[a-zA-Z0-9_-]+")
 
-    fun normalize(value: String): String? = value.takeIf(valid::matches)?.lowercase(Locale.ROOT)
+    fun normalize(value: String, maxLength: Int = 32): String? =
+        value.takeIf { it.length in 1..maxLength && chars.matches(it) }?.lowercase(Locale.ROOT)
 }
 
 internal data class Position(

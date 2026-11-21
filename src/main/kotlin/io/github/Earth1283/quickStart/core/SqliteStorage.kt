@@ -22,10 +22,11 @@ internal data class StorageIncident(val at: Instant, val operation: String, val 
 
 internal class SqliteStorage(
     private val file: Path,
+    private val maxPendingOperations: Int = MAX_PENDING_OPERATIONS_DEFAULT,
     private val reportFailure: (Throwable) -> Unit,
 ) : RuntimeModule {
     private val gate = Any()
-    private val executor = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(MAX_PENDING_OPERATIONS + 1), { task ->
+    private val executor = ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, ArrayBlockingQueue(maxPendingOperations + 1), { task ->
         Thread(task, "QuickStart-SQLite").apply { isDaemon = false }
     })
     private var accepting = true
@@ -151,7 +152,7 @@ internal class SqliteStorage(
         suspendCancellableCoroutine { continuation ->
             synchronized(gate) {
                 if (!continuation.isActive) return@synchronized
-                if (!accepting || executor.queue.size >= MAX_PENDING_OPERATIONS) {
+                if (!accepting || executor.queue.size >= maxPendingOperations) {
                     val reason = if (accepting) "SQLite queue is full. Try again shortly." else "SQLite is shutting down."
                     continuation.resumeWith(Result.failure(StorageFailure(reason)))
                     return@synchronized
@@ -251,6 +252,6 @@ internal class SqliteStorage(
     }
 
     private companion object {
-        const val MAX_PENDING_OPERATIONS = 128
+        const val MAX_PENDING_OPERATIONS_DEFAULT = 128
     }
 }

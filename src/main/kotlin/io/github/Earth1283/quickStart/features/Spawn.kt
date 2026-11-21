@@ -31,7 +31,7 @@ internal class Spawn(
                     server.worlds.firstOrNull()?.spawnLocation?.snapshot()
                 }
                 if (position == null) return call.actor.reply("Server spawn is unavailable.")
-                call.teleportResult(teleports.move(player, position), "Teleported to spawn.")
+                call.teleportResult(teleports.move(player, position, call.settings.spawnCooldownSeconds.takeIf { it > 0 }), "Teleported to spawn.")
             }
             else -> error("Unsupported spawn command ${call.command.id}")
         }

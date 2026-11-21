@@ -40,6 +40,7 @@ import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent
 import org.bukkit.event.player.PlayerJoinEvent
 import org.bukkit.event.player.PlayerQuitEvent
+import org.bukkit.event.player.PlayerRespawnEvent
 import org.bukkit.event.player.PlayerTeleportEvent
 import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.ServicePriority
@@ -59,7 +60,7 @@ internal class QuickStartRuntime(
     private val backHistory = if ("teleportation" in config.enabledModules) BackHistory(players) else null
     private val teleports by lazy { Teleports(plugin.server, scheduler, backHistory) }
     private val sqlite = lazy {
-        SqliteStorage(plugin.dataFolder.toPath().resolve("quickstart.db")) { report("SQLite shutdown", it) }
+        SqliteStorage(plugin.dataFolder.toPath().resolve("quickstart.db"), config.maxPendingOperations) { report("SQLite shutdown", it) }
     }
     private val loaded = CompletableDeferred<Unit>()
     private val bootFinished = CompletableDeferred<Readiness>()
@@ -100,7 +101,7 @@ internal class QuickStartRuntime(
         val server = plugin.server
         server.pluginManager.registerEvents(this, plugin)
         if (backHistory != null) {
-            val listener = BackListener(backHistory, players)
+            val listener = BackListener(backHistory, players) { features }
             backListener = listener
             server.pluginManager.registerEvents(listener, plugin)
         }
@@ -202,22 +203,34 @@ internal class QuickStartRuntime(
     @EventHandler(priority = EventPriority.MONITOR)
     fun onJoin(event: PlayerJoinEvent) {
         val session = players.joined(event.player) ?: return
-        if (features.firstJoinSpawn && "spawn" in config.enabledModules && !event.player.hasPlayedBefore()) {
-            session.submit { firstJoin(session) }
+        val spawnEnabled = "spawn" in config.enabledModules
+        if (spawnEnabled && features.firstJoinSpawn && !event.player.hasPlayedBefore()) {
+            session.submit { spawnTeleport(session) }
+        } else if (spawnEnabled && features.spawnOnJoin) {
+            session.submit { spawnTeleport(session) }
         }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onQuit(event: PlayerQuitEvent) = players.quit(event.player)
 
-    internal class BackListener(private val history: BackHistory, private val players: Players) : Listener {
+    @EventHandler(priority = EventPriority.MONITOR)
+    fun onRespawn(event: PlayerRespawnEvent) {
+        if (!features.spawnOnRespawn || "spawn" !in config.enabledModules) return
+        val session = players.session(event.player) ?: return
+        session.submit { spawnTeleport(session) }
+    }
+
+    internal class BackListener(private val history: BackHistory, private val players: Players, private val features: () -> FeatureSettings) : Listener {
         @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
         fun onTeleport(event: PlayerTeleportEvent) {
+            if (!features().backOnTeleport) return
             players.session(event.player)?.let { history.record(it, event.from.snapshot()) }
         }
 
         @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
         fun onDeath(event: PlayerDeathEvent) {
+            if (!features().backOnDeath) return
             val player = event.entity
             players.session(player)?.let { history.record(it, player.location.snapshot()) }
         }
@@ -225,7 +238,7 @@ internal class QuickStartRuntime(
 
     private var backListener: BackListener? = null
 
-    private suspend fun firstJoin(session: PlayerSession) {
+    private suspend fun spawnTeleport(session: PlayerSession) {
         val actor = CommandActor(session.player, session, scheduler)
         handleErrors(actor) {
             val boot = bootFinished.await()
@@ -263,7 +276,12 @@ internal class QuickStartRuntime(
     }
 
     private suspend fun executeFeature(actor: CommandActor, feature: FeatureCommand, args: Array<out String>) {
-        val argument = feature.parse(args)
+        val nameMaxLength = when (feature.module) {
+            "homes" -> features.homeNameMaxLength
+            "warps" -> features.warpNameMaxLength
+            else -> 32
+        }
+        val argument = feature.parse(args, nameMaxLength)
         if (feature.playerOnly) actor.player()
         when (readiness) {
             Readiness.READY, Readiness.DEGRADED -> Unit
@@ -303,6 +321,7 @@ internal class QuickStartRuntime(
             if (config.startup != replacement.startup) add("startup")
             if (config.enabledModules != replacement.enabledModules) add("modules")
             if (config.warmup != replacement.warmup) add("performance.warmup")
+            if (config.maxPendingOperations != replacement.maxPendingOperations) add("storage.max-pending-operations")
         }
         buildList {
             add("Reloaded home, warp, spawn and teleportation settings.")
