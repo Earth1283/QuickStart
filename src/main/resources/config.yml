@@ -1,445 +1,82 @@
-# ==================================================================================
-#                           QuickStart Configuration
-# ==================================================================================
-# This file controls every aspect of QuickStart's behavior. Settings under
-# "startup", "modules", "performance", and "storage" require a full server
-# restart to take effect. Everything else can be hot-reloaded with /qs reload.
-# ==================================================================================
+# QuickStart configuration
+# Settings under startup, modules, performance, and storage require a server restart.
+# Other settings can be reloaded with /qs reload.
 
-
-# ----------------------------------------------------------------------------------
-#  Startup Strategy
-# ----------------------------------------------------------------------------------
-# Controls how and when QuickStart initializes its modules during server boot.
-# This directly affects how quickly the server becomes playable, and how much
-# CPU and memory are used at startup.
-#
-# Available modes: LAZY | ADHD | ALL_AT_ONCE
-#
-# LAZY
-#   Starts only the core of the plugin when the server boots. Individual feature
-#   modules (homes, warps, spawn, teleportation) are initialized on-demand —
-#   that is, the very first time a player runs a command that requires them.
-#   This results in the fastest possible server start time, but the first player
-#   to use a feature will experience a brief delay while that module loads.
-#   Best for: Servers on free-tier hosting, low-RAM environments, or development
-#   servers where fast restarts matter more than instant feature availability.
-#
-# ADHD (Default)
-#   Loads only the core of the plugin when the server starts, identical to LAZY.
-#   However, it takes advantage of the idle window between the server finishing
-#   its initialization phase and the first player actually joining to
-#   proactively warm up (pre-initialize) optional modules in the background.
-#   If a player joins before warmup finishes, the remaining modules continue
-#   loading in the background (or pause, depending on warmup settings below).
-#   This is the best balance of startup speed and player experience for most
-#   servers, since features are typically ready before anyone uses them.
-#   Best for: Most standalone servers (not behind a proxy) with moderate resources.
-#
-# ALL_AT_ONCE
-#   Loads every enabled module during server startup, before any player is
-#   allowed to join. Players attempting to connect while modules are still
-#   loading will be kicked with a "still starting" message. This guarantees
-#   that all features are fully ready the instant the first player logs in,
-#   at the cost of a longer startup time.
-#   Best for: Servers behind a proxy (Velocity, BungeeCord), where the proxy
-#   tends to release a large batch of players the moment Paper declares itself
-#   fully initialized — causing high CPU load at the worst time if modules
-#   aren't ready yet.
-#
-# How do I choose? For most servers, ADHD is enough. If your server is behind a
-# proxy, such as Velocity or BungeeCord, enable ALL_AT_ONCE, as proxies tend to
-# release a large batch of players the moment Paper declares itself fully
-# initialized, leading to higher CPU usage at the worst time. However, if your
-# server is running on a free tier server host or limited RAM, use LAZY.
+# Startup initialization strategy:
+#   ADHD (default) - Pre-warms modules in the background before the first player joins.
+#   LAZY           - Loads modules on-demand when first used.
+#   ALL_AT_ONCE    - Loads all modules during startup before accepting logins (recommended for proxies).
 startup: ADHD
 
-
-# ----------------------------------------------------------------------------------
-#  Modules
-# ----------------------------------------------------------------------------------
-# Toggle individual feature modules on or off. Disabling a module prevents it
-# from loading entirely — its commands will not be registered, its data will not
-# be touched, and it will consume zero resources. Changing these requires a
-# server restart.
-#
-# Each module corresponds to a group of commands:
-#   homes         → /sethome, /home, /delhome, /homes
-#   warps         → /setwarp, /warp, /delwarp, /warps
-#   spawn         → /setspawn, /spawn
-#   teleportation → /tpa, /tpahere, /tpaccept, /tpdeny, /back
-#
-# The homes, warps, and spawn modules all depend on the internal "storage"
-# module (SQLite). If all three are disabled, storage is automatically disabled
-# too, saving the overhead of maintaining a database connection.
-# The teleportation module has no storage dependency — requests are held in
-# memory and expire naturally.
-#
-# Set to true to enable, false to disable.
+# Enable or disable individual feature modules.
 modules:
-  homes: true             # Player-owned personal teleport points.
-  warps: true             # Server-wide shared teleport points (admin-managed).
-  spawn: true             # A single global spawn point with optional first-join teleport.
-  teleportation: true     # Player-to-player teleport requests (/tpa) and /back history.
+  homes: true
+  warps: true
+  spawn: true
+  teleportation: true # tpa requests
 
-
-# ----------------------------------------------------------------------------------
-#  Homes
-# ----------------------------------------------------------------------------------
-# Configuration for the homes module. Homes are personal, per-player saved
-# locations. Each player can save up to the configured limit and teleport back
-# to any of them by name.
-#
-# Commands: /sethome <name>, /home <name>, /delhome <name>, /homes
-# Permissions: quickstart.homes (use all home commands)
+# Personal player homes (/home, /sethome, /delhome, /homes).
 homes:
-
-  # Maximum number of homes a single player can have at any time.
-  # When a player tries to /sethome and they already have this many homes,
-  # they receive an error message. Updating an existing home (same name) does
-  # NOT count toward the limit — it overwrites the coordinates in place.
-  #
-  # Range: 1 to 1000
-  # Default: 5
+  # Maximum number of homes a player can set.
   limit: 5
-
-  # Cooldown (in seconds) after teleporting to a home before the player can
-  # teleport to another home. This is independent of the teleportation module's
-  # cooldown — /home has its own cooldown, and /tpa has its own. Set to 0 to
-  # allow instant back-to-back /home teleports with no delay.
-  #
-  # Range: 0 to 3600 (0 seconds to 1 hour)
-  # Default: 0 (no cooldown)
+  # Cooldown in seconds between home teleports (0 to disable).
   cooldown-seconds: 0
-
-  # Maximum length for home names. Names must be between 1 and this value,
-  # using only letters, numbers, hyphens, and underscores (a-zA-Z0-9_-).
-  # Names are case-insensitive and stored in lowercase. Existing homes with
-  # names longer than a reduced limit will still work, but new homes cannot
-  # exceed the new limit.
-  #
-  # Range: 1 to 32
-  # Default: 32
+  # Maximum length for home names (1-32 characters).
   name-max-length: 32
 
-
-# ----------------------------------------------------------------------------------
-#  Warps
-# ----------------------------------------------------------------------------------
-# Configuration for the warps module. Warps are server-wide shared teleport
-# points, typically created by administrators, that any player can use.
-# Unlike homes, warps are not owned by any player — there is a single global
-# pool of warps.
-#
-# Commands:
-#   /warp <name>    — Teleport to a warp        (quickstart.warps)
-#   /warps          — List available warps       (quickstart.warps)
-#   /setwarp <name> — Create or update a warp   (quickstart.warps.manage)
-#   /delwarp <name> — Delete a warp             (quickstart.warps.manage)
+# Server-wide warps (/warp, /setwarp, /delwarp, /warps).
 warps:
-
-  # When enabled, each warp requires its own permission node to use or see.
-  # A player must have either:
-  #   quickstart.warp.<name>    — permission for a specific warp, OR
-  #   quickstart.warps.bypass   — permission to use all warps regardless.
-  #
-  # When disabled (default), any player with the quickstart.warps permission
-  # can use and see every warp. The /warps list is also filtered: players
-  # only see warps they have permission to use.
-  #
-  # This is useful for progression systems, rank-based warps, or restricting
-  # certain warps to specific groups of players via your permissions plugin.
-  #
-  # Default: false
+  # Require quickstart.warp.<name> to use or list each warp.
   per-warp-permissions: false
-
-  # Cooldown (in seconds) after teleporting to a warp before the player can
-  # teleport to another warp. Independent of homes and teleportation cooldowns.
-  # Set to 0 for no cooldown.
-  #
-  # Range: 0 to 3600 (0 seconds to 1 hour)
-  # Default: 0 (no cooldown)
+  # Cooldown in seconds between warp teleports (0 to disable).
   cooldown-seconds: 0
-
-  # Maximum length for warp names. Same rules as homes: 1 to this value,
-  # a-zA-Z0-9_-, case-insensitive, stored lowercase.
-  #
-  # Range: 1 to 32
-  # Default: 32
+  # Maximum length for warp names (1-32 characters).
   name-max-length: 32
 
-
-# ----------------------------------------------------------------------------------
-#  Spawn
-# ----------------------------------------------------------------------------------
-# Configuration for the spawn module. This provides a single server-wide spawn
-# point. If no spawn has been set with /setspawn, /spawn falls back to the
-# default world's spawn location.
-#
-# Commands:
-#   /spawn     — Teleport to spawn                (quickstart.spawn)
-#   /setspawn  — Set spawn to your location        (quickstart.spawn.manage)
+# Server spawn point (/spawn, /setspawn).
 spawn:
-
-  # When enabled, players joining the server for the very first time (i.e.,
-  # they have never played on this server before) are automatically teleported
-  # to the configured spawn point. This only triggers once per player, on
-  # their very first join. It does NOT affect returning players. If no spawn
-  # has been set via /setspawn, nothing happens (no fallback to world spawn
-  # for first-join; the world spawn fallback is only used by /spawn).
-  #
-  # Requires the spawn module to be enabled in the modules section above.
-  # If on-join is also true, on-join takes precedence for all joins including
-  # the first.
-  #
-  # Default: false
+  # Teleport players to spawn on their first join.
   first-join: false
-
-  # When enabled, players are automatically teleported to the configured spawn
-  # point after dying and respawning. This overrides vanilla respawn behavior.
-  # If no spawn has been set via /setspawn, nothing happens.
-  #
-  # This is useful for hub servers or minigame lobbies where players should
-  # always return to a central location after death.
-  #
-  # Default: false
+  # Teleport players to spawn after dying.
   on-respawn: false
-
-  # When enabled, players are teleported to the configured spawn point every
-  # time they join the server — not just on their first join. This applies to
-  # all players on every login. If no spawn has been set via /setspawn,
-  # nothing happens.
-  #
-  # This is useful for lobby servers where players should always start at
-  # spawn regardless of where they logged out.
-  #
-  # Note: When this is true, first-join is effectively redundant since every
-  # join triggers a spawn teleport anyway.
-  #
-  # Default: false
+  # Teleport players to spawn on every join.
   on-join: false
-
-  # Cooldown (in seconds) after teleporting to spawn via /spawn before the
-  # player can use /spawn again. Independent of homes and teleportation
-  # cooldowns. Does NOT apply to automatic spawn teleports (first-join,
-  # on-join, on-respawn) — only the /spawn command. Set to 0 for no cooldown.
-  #
-  # Range: 0 to 3600 (0 seconds to 1 hour)
-  # Default: 0 (no cooldown)
+  # Cooldown in seconds between /spawn uses (0 to disable).
   cooldown-seconds: 0
 
-
-# ----------------------------------------------------------------------------------
-#  Teleportation
-# ----------------------------------------------------------------------------------
-# Configuration for the teleportation module. This covers player-to-player
-# teleport requests (/tpa, /tpahere, /tpaccept, /tpdeny) and the /back
-# command which returns you to your previous location after a teleport or death.
-#
-# Commands:
-#   /tpa <player>      — Request to teleport TO another player   (quickstart.tpa)
-#   /tpahere <player>  — Request another player to come to YOU   (quickstart.tpa)
-#   /tpaccept [player] — Accept a pending teleport request       (quickstart.tpa)
-#   /tpdeny [player]   — Deny a pending teleport request         (quickstart.tpa)
-#   /back              — Return to your last location            (quickstart.back)
+# Teleport requests (/tpa, /tpahere, /tpaccept, /tpdeny) and /back.
 teleportation:
-
-  # Minimum time (in seconds) a player must wait between sending teleport
-  # requests (/tpa, /tpahere). This prevents spamming other players with
-  # repeated requests. The cooldown is tracked per-sender. This same cooldown
-  # also applies to the actual teleport execution when a request is accepted
-  # (/tpaccept) and when using /back.
-  #
-  # Set to 0 to disable the cooldown entirely.
-  #
-  # Range: 0 to 3600 (0 seconds to 1 hour)
-  # Default: 5
+  # Cooldown in seconds between sending requests or using /back (0 to disable).
   cooldown-seconds: 5
-
-  # How long (in seconds) a teleport request stays valid before it
-  # automatically expires. If the recipient does not /tpaccept or /tpdeny
-  # within this window, the request is silently discarded.
-  #
-  # Requests are also immediately invalidated if either the sender or the
-  # recipient disconnects from the server.
-  #
-  # Each player can have at most one outgoing request at a time. Sending a
-  # new request replaces any previous pending request from the same player.
-  #
-  # Range: 1 to 3600 (1 second to 1 hour)
-  # Default: 60
+  # Time in seconds before a pending teleport request expires.
   request-expiration-seconds: 60
-
-  # Whether /back should remember the player's location before death.
-  # When true, dying records your death location so /back can return you
-  # there. When false, deaths are ignored and /back only tracks teleports.
-  #
-  # Only the single most recent location is stored — /back is not a history
-  # stack. If a player dies and then teleports, /back will return to the
-  # teleport origin, not the death location.
-  #
-  # Default: true
+  # Record player's death location for /back.
   back-on-death: true
-
-  # Whether /back should remember the player's location before teleporting.
-  # When true, any teleport event (including /home, /warp, /spawn, /tpa, etc.)
-  # records the origin location so /back can return you there.
-  # When false, teleports are ignored and /back only tracks deaths (if
-  # back-on-death is true).
-  #
-  # Default: true
+  # Record location before teleporting for /back.
   back-on-teleport: true
 
-
-# ==================================================================================
-#  Advanced Settings
-# ==================================================================================
-# The settings below control internal behavior that most server owners will never
-# need to touch. Changes to performance, storage, and startup require a full
-# server restart to take effect.
-# ==================================================================================
-
-
-# ----------------------------------------------------------------------------------
-#  Performance — Background Warmup
-# ----------------------------------------------------------------------------------
-# These settings fine-tune the background warmup system used by the ADHD startup
-# strategy. They have NO effect when startup is set to LAZY or ALL_AT_ONCE.
-#
-# In ADHD mode, after the critical (storage) module loads, QuickStart uses
-# background worker coroutines to pre-initialize optional modules (homes, warps,
-# spawn, teleportation) during the idle gap before the first player joins. This
-# ensures features are ready by the time anyone uses them, without blocking the
-# main thread or delaying server startup.
-#
-# The warmup system dynamically adjusts its worker count based on whether
-# players are online:
-#   - When the server is empty: uses "empty-server-workers" workers.
-#   - When players are online:  uses "active-server-workers" workers.
-#   - If pause-optional-on-join is true and players are online: uses 0 workers
-#     (completely pauses warmup to avoid competing for CPU during gameplay).
+# Background warmup settings for ADHD startup mode.
 performance:
   warmup:
-
-    # Master switch for the warmup system. When disabled, ADHD mode behaves
-    # identically to LAZY — modules are only initialized when first used.
-    #
-    # Default: true
     enabled: true
-
-    # Number of concurrent background worker coroutines used to initialize
-    # modules when no players are online. More workers means modules load in
-    # parallel, finishing faster — but at the cost of higher CPU usage during
-    # the warmup window. Each worker processes one module at a time.
-    #
-    # For most servers, 2 is a good balance. Increase this on powerful
-    # dedicated servers with many modules; decrease to 1 on shared hosting.
-    #
-    # Range: 0 to 16
-    # Default: 2
+    # Worker threads when no players are online (0-16).
     empty-server-workers: 2
-
-    # Number of concurrent background worker coroutines used when players are
-    # online (and pause-optional-on-join is false). This should always be less
-    # than or equal to empty-server-workers, since you want to minimize CPU
-    # contention during active gameplay.
-    #
-    # Keep this less than the value you put for empty-server-workers.
-    # Setting this to 0 effectively pauses warmup when players are online,
-    # similar to pause-optional-on-join but without fully stopping.
-    #
-    # Range: 0 to 16 (must not exceed empty-server-workers)
-    # Default: 1
+    # Worker threads when players are online (must be <= empty-server-workers).
     active-server-workers: 1
-
-    # When true, ALL warmup workers are paused the moment any player joins the
-    # server. Warmup resumes when the server becomes empty again. This
-    # completely eliminates any background CPU overhead during active gameplay,
-    # at the cost of potentially leaving some modules uninitialized if the
-    # server never becomes empty again.
-    #
-    # When false, warmup continues with "active-server-workers" workers even
-    # while players are online.
-    #
-    # Recommendation: Leave this enabled unless your server rarely empties out
-    # and you want modules warmed up even during gameplay.
-    #
-    # Default: true
+    # Pause warmup while players are online.
     pause-optional-on-join: true
 
-
-# ----------------------------------------------------------------------------------
-#  Storage
-# ----------------------------------------------------------------------------------
-# Controls the data storage backend for homes, warps, and spawn locations.
-# All persistent data (coordinates, world UUIDs, metadata) is stored in the
-# configured backend.
-#
-# The database file is located at: plugins/QuickStart/quickstart.db
-# SQLite uses WAL (Write-Ahead Logging) mode for better concurrent read
-# performance, and all database operations run on a dedicated single-threaded
-# executor to avoid blocking the server's main thread.
+# Storage backend settings.
 storage:
-
-  # The storage backend to use. Currently, only "sqlite" is supported.
-  # Future versions may add additional backends (e.g., MySQL, PostgreSQL).
-  #
-  # Allowed values: sqlite
-  # Default: sqlite
   backend: sqlite
-
-  # Maximum number of database operations that can be queued at once. When the
-  # queue is full, new operations are rejected with a "try again shortly"
-  # message until the queue drains. This acts as a safety valve to prevent
-  # unbounded memory growth under extreme load.
-  #
-  # Increase this on large servers where many players trigger storage
-  # operations simultaneously (e.g., 100+ players all using /home at once).
-  # Decrease on memory-constrained environments to cap overhead.
-  #
-  # Range: 8 to 4096
-  # Default: 128
-  # Requires restart.
+  # Maximum number of queued database operations before rejecting new requests.
   max-pending-operations: 128
 
-
-# ----------------------------------------------------------------------------------
-#  Telemetry
-# ----------------------------------------------------------------------------------
-# Controls anonymous usage statistics collection via bStats. When enabled,
-# basic server metrics (player count, server version, plugin version) are sent
-# to bStats for plugin analytics. No personal or identifiable data is collected.
-#
-# This feature is reserved for a future release. In the current version, this
-# setting MUST remain false — setting it to true will cause a startup error.
+# bStats telemetry metrics
 telemetry:
-
-  # Whether to enable bStats telemetry reporting.
-  #
-  # Allowed values: false (true is not supported in this version)
-  # Default: false
   enabled: false
 
-
-# ----------------------------------------------------------------------------------
-#  Scope Creep — Experimental Features
-# ----------------------------------------------------------------------------------
-# This section contains experimental or planned features that are not yet fully
-# implemented. They are exposed in the config for forward compatibility, but
-# enabling them in the current version will cause a startup error.
-#
-# Do not enable these unless instructed to by a development build's release notes.
+# Experimental features
 scope-creep:
-
-  # Scripting engine for custom QuickStart extensions. When completed, this
-  # will allow server owners to write lightweight scripts that hook into
-  # QuickStart events (e.g., on teleport, on home set) for custom behavior.
-  #
-  # NOT YET IMPLEMENTED — must remain false in this version.
   scripting:
-
-    # Whether to enable the experimental scripting engine.
-    #
-    # Allowed values: false (true is not supported in this version)
-    # Default: false
     enabled: false

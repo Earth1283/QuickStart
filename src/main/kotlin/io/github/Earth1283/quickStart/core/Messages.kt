@@ -3,7 +3,9 @@ package io.github.Earth1283.quickStart.core
 import java.io.File
 import java.io.Reader
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.minimessage.MiniMessage
+import net.kyori.adventure.text.minimessage.tag.Tag
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder
 import net.kyori.adventure.text.minimessage.tag.resolver.TagResolver
 import org.bukkit.configuration.file.YamlConfiguration
@@ -36,6 +38,16 @@ internal class Messages private constructor(private val templates: Map<String, S
             else Placeholder.unparsed(name, value.toString())
             tags.resolver(placeholder)
         }
+        tags.resolver(TagResolver.resolver("quickstart") { args, context ->
+            val command = args.popOr("Expected a QuickStart command name").value()
+            if (command != "qs" && command !in FeatureCommand.byId) {
+                throw context.newException("Unknown QuickStart command: $command", args)
+            }
+            val name = args.popOr("Expected a text placeholder name").value()
+            val argument = message.placeholders.lastOrNull { it.first == name }?.second as? String
+                ?: throw context.newException("Unknown text placeholder: $name", args)
+            Tag.styling(ClickEvent.runCommand("/quickstart:$command $argument"))
+        })
         return miniMessage.deserialize(template, tags.build())
     }
 

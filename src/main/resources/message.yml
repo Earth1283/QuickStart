@@ -1,6 +1,10 @@
 # Customize QuickStart messages with MiniMessage tags, such as <gold> or <bold>.
 # Placeholders like <name> and <player> are filled in by QuickStart. Each
 # message supports the placeholders shown in its default value.
+# You can preview them here: https://webui.advntr.dev/
+# For a fixed command, use <click:run_command:'/quickstart:spawn'>Spawn</click>.
+# To pass a text placeholder as the argument, use <quickstart:tpaccept:player>Accept</quickstart>.
+# Use <hover:show_text:'Tooltip'>Text</hover> to add hover text to either link.
 # Omitted entries use the bundled defaults. Run /qs reload to apply edits.
 
 common:
@@ -57,8 +61,14 @@ back:
   unavailable: "<yellow>No previous location is available.</yellow>"
 
 requests:
-  incoming: "<aqua><player> asked to teleport to you. /tpaccept <player> or /tpdeny <player></aqua>"
-  incoming-here: "<aqua><player> asked you to teleport to them. /tpaccept <player> or /tpdeny <player></aqua>"
+  incoming: >-
+    <aqua><player> wants to teleport to you.</aqua>
+    <green><hover:show_text:'Accept this teleport request'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
+    <red><hover:show_text:'Deny this teleport request'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+  incoming-here: >-
+    <aqua><player> asked you to teleport to them.</aqua>
+    <green><hover:show_text:'Accept this teleport request'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
+    <red><hover:show_text:'Deny this teleport request'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
   sent: "<green>Teleport request sent to <player>.</green>"
   cooldown: "<yellow>Please wait before sending another teleport request.</yellow>"
   player-unavailable: "<red>That player is unavailable.</red>"
