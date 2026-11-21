@@ -19,3 +19,8 @@ hs_err_pid*
 
 # Common working directory
 run
+
+.kotlin/
+
+# verification client
+verification/

@@ -1,0 +1,362 @@
+package io.github.Earth1283.quickStart.core
+
+import io.github.Earth1283.quickStart.api.ModuleState
+import io.github.Earth1283.quickStart.api.QuickStartApi
+import io.github.Earth1283.quickStart.api.Readiness
+import io.github.Earth1283.quickStart.features.Homes
+import io.github.Earth1283.quickStart.features.Spawn
+import io.github.Earth1283.quickStart.features.Teleportation
+import io.github.Earth1283.quickStart.features.Warps
+import io.github.Earth1283.quickStart.platform.BackHistory
+import io.github.Earth1283.quickStart.platform.EntityUnavailable
+import io.github.Earth1283.quickStart.platform.PlayerSession
+import io.github.Earth1283.quickStart.platform.Players
+import io.github.Earth1283.quickStart.platform.ServerScheduler
+import io.github.Earth1283.quickStart.platform.Teleports
+import io.github.Earth1283.quickStart.platform.snapshot
+import java.io.File
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
+import java.util.logging.Level
+import kotlin.time.TimeSource
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import net.kyori.adventure.text.Component
+import org.bukkit.command.Command
+import org.bukkit.command.CommandSender
+import org.bukkit.command.TabExecutor
+import org.bukkit.entity.Player
+import org.bukkit.event.EventHandler
+import org.bukkit.event.EventPriority
+import org.bukkit.event.HandlerList
+import org.bukkit.event.Listener
+import org.bukkit.event.entity.PlayerDeathEvent
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent
+import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.PlayerQuitEvent
+import org.bukkit.event.player.PlayerTeleportEvent
+import org.bukkit.event.server.ServerLoadEvent
+import org.bukkit.plugin.ServicePriority
+import org.bukkit.plugin.java.JavaPlugin
+
+internal class QuickStartRuntime(
+    private val plugin: JavaPlugin,
+    private val configFile: File,
+    internal val config: Configuration,
+    private val configurationFailure: Throwable?,
+    enabledAt: TimeSource.Monotonic.ValueTimeMark,
+) : QuickStartApi, Listener, TabExecutor {
+    private val lifecycle = SupervisorJob()
+    private val scope = CoroutineScope(lifecycle + Dispatchers.Default)
+    private val scheduler = ServerScheduler(plugin)
+    private val players = Players(scope)
+    private val backHistory = if ("teleportation" in config.enabledModules) BackHistory(players) else null
+    private val teleports by lazy { Teleports(plugin.server, scheduler, backHistory) }
+    private val sqlite = lazy {
+        SqliteStorage(plugin.dataFolder.toPath().resolve("quickstart.db")) { report("SQLite shutdown", it) }
+    }
+    private val loaded = CompletableDeferred<Unit>()
+    private val bootFinished = CompletableDeferred<Readiness>()
+    private val state = AtomicReference(Readiness.STARTING)
+    private val reloadLock = Mutex()
+    @Volatile private var features = config.features
+    @Volatile private var configProblem = configurationFailure?.let(::message)
+    @Volatile private var startupProblem: String? = null
+    internal val startup = StartupMeasurements(enabledAt)
+    internal val commands = LatencyMeasurements()
+    private val administration = Administration(this)
+
+    private val modules = Modules(scope, definitions(), scheduler::global) { id, failure ->
+        report("Module $id", failure)
+    }
+
+    override val readiness: Readiness get() = state.get()
+    override fun modules() = modules.statuses()
+
+    private fun definitions(): List<ModuleDefinition> {
+        val persistent = listOf("homes", "warps", "spawn")
+        val storage = ModuleDefinition("storage", persistent.any(config.enabledModules::contains), critical = true) { sqlite.value }
+        fun feature(id: String, create: () -> CommandModule) = ModuleDefinition(
+            id = id,
+            enabled = id in config.enabledModules,
+            required = if (id in persistent) listOf("storage") else emptyList(),
+        ) { create() }
+        return listOf(
+            storage,
+            feature("teleportation") { Teleportation(players, scheduler, teleports, checkNotNull(backHistory)) },
+            feature("homes") { Homes(sqlite.value, teleports) },
+            feature("warps") { Warps(sqlite.value, teleports) },
+            feature("spawn") { Spawn(sqlite.value, teleports, plugin.server, scheduler) },
+        )
+    }
+
+    fun start() {
+        val server = plugin.server
+        server.pluginManager.registerEvents(this, plugin)
+        if (backHistory != null) {
+            val listener = BackListener(backHistory, players)
+            backListener = listener
+            server.pluginManager.registerEvents(listener, plugin)
+        }
+        for (id in listOf("qs") + FeatureCommand.byId.keys) {
+            val command = checkNotNull(plugin.getCommand(id)) { "Missing command registration for $id" }
+            command.setExecutor(this)
+            command.tabCompleter = this
+        }
+        server.servicesManager.register(QuickStartApi::class.java, this, plugin, ServicePriority.Normal)
+        startup.bootstrapMillis = startup.elapsedMillis()
+        if (configurationFailure != null) {
+            report("Configuration", configurationFailure)
+            finishBoot(Readiness.FAILED)
+        } else {
+            scope.launch { boot() }
+        }
+    }
+
+    private suspend fun boot() {
+        try {
+            val criticalStarted = TimeSource.Monotonic.markNow()
+            val criticalFailures = try {
+                modules.criticalIds.mapNotNull { id ->
+                    try {
+                        modules.initialize(id)
+                        null
+                    } catch (failure: ModuleUnavailable) {
+                        failure
+                    }
+                }
+            } finally {
+                startup.criticalMillis = criticalStarted.elapsedNow().inWholeMilliseconds
+            }
+            loaded.await()
+            startupProblem = criticalFailures.firstOrNull()?.message
+            if (config.startup == StartupStrategy.ALL_AT_ONCE) {
+                criticalFailures.firstOrNull()?.let { throw it }
+                for (id in modules.optionalIds) modules.initialize(id)
+            }
+            finishBoot(if (criticalFailures.isEmpty()) Readiness.READY else Readiness.DEGRADED)
+            if (config.startup == StartupStrategy.ADHD && config.warmup.enabled && modules.optionalIds.isNotEmpty() &&
+                maxOf(config.warmup.workers(0), config.warmup.workers(1)) > 0
+            ) {
+                val warmupStarted = TimeSource.Monotonic.markNow()
+                warmModules(modules.optionalIds, config.warmup, players.count) { id ->
+                    try {
+                        modules.initialize(id)
+                    } catch (_: ModuleUnavailable) {
+                    }
+                }
+                startup.warmupMillis = warmupStarted.elapsedNow().inWholeMilliseconds
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: ModuleUnavailable) {
+            startupProblem = message(failure)
+            finishBoot(Readiness.FAILED)
+        } catch (failure: Exception) {
+            startupProblem = message(failure)
+            report("Startup", failure)
+            finishBoot(Readiness.FAILED)
+        }
+    }
+
+    private fun finishBoot(result: Readiness) {
+        if (!state.compareAndSet(Readiness.STARTING, result)) return
+        if (result == Readiness.READY) startup.readinessMillis = startup.elapsedMillis()
+        bootFinished.complete(result)
+        plugin.logger.info("${config.startup} startup ${result.name.lowercase(Locale.ROOT)} after ${startup.elapsedMillis()} ms")
+    }
+
+    fun close() {
+        if (state.getAndSet(Readiness.STOPPING) == Readiness.STOPPING) return
+        bootFinished.complete(Readiness.STOPPING)
+        HandlerList.unregisterAll(this)
+        backListener?.let(HandlerList::unregisterAll)
+        plugin.server.servicesManager.unregister(QuickStartApi::class.java, this)
+        players.close()
+        backHistory?.close()
+        modules.close()
+        lifecycle.cancel()
+    }
+
+    @EventHandler
+    fun onServerLoaded(event: ServerLoadEvent) {
+        loaded.complete(Unit)
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    fun onPreLogin(event: AsyncPlayerPreLoginEvent) {
+        if (config.startup != StartupStrategy.ALL_AT_ONCE || readiness == Readiness.READY ||
+            event.loginResult != AsyncPlayerPreLoginEvent.Result.ALLOWED
+        ) return
+        val notice = if (readiness == Readiness.FAILED) "QuickStart startup failed. Contact a server administrator."
+        else "QuickStart is still starting. Please try again shortly."
+        event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, Component.text(notice))
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    fun onJoin(event: PlayerJoinEvent) {
+        val session = players.joined(event.player) ?: return
+        if (features.firstJoinSpawn && "spawn" in config.enabledModules && !event.player.hasPlayedBefore()) {
+            session.submit { firstJoin(session) }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    fun onQuit(event: PlayerQuitEvent) = players.quit(event.player)
+
+    internal class BackListener(private val history: BackHistory, private val players: Players) : Listener {
+        @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+        fun onTeleport(event: PlayerTeleportEvent) {
+            players.session(event.player)?.let { history.record(it, event.from.snapshot()) }
+        }
+
+        @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+        fun onDeath(event: PlayerDeathEvent) {
+            val player = event.entity
+            players.session(player)?.let { history.record(it, player.location.snapshot()) }
+        }
+    }
+
+    private var backListener: BackListener? = null
+
+    private suspend fun firstJoin(session: PlayerSession) {
+        val actor = CommandActor(session.player, session, scheduler)
+        handleErrors(actor) {
+            val boot = bootFinished.await()
+            if (boot != Readiness.READY && boot != Readiness.DEGRADED) return@handleErrors
+            modules.withModule("spawn") { module ->
+                startup.recordFirstPlayerReady()
+                (module as Spawn).placeFirstJoin(session)?.let { actor.reply(it) }
+            }
+        }
+    }
+
+    override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
+        val feature = FeatureCommand.byId[command.name]
+        val player = sender as? Player
+        val session = player?.let(players::session)
+        if (player != null && session == null) {
+            sender.sendMessage("Your QuickStart session is still starting.")
+            return true
+        }
+        val actor = CommandActor(sender, session, scheduler)
+        val action: suspend () -> Unit = {
+            val started = TimeSource.Monotonic.markNow()
+            try {
+                handleErrors(actor) {
+                    if (feature == null) administration.execute(actor, args)
+                    else executeFeature(actor, feature, args)
+                }
+            } finally {
+                if (feature != null) commands.record(started.elapsedNow().inWholeNanoseconds)
+            }
+        }
+        if (session == null) scope.launch { action() }
+        else if (!session.submit(action)) sender.sendMessage("Too many QuickStart commands are pending.")
+        return true
+    }
+
+    private suspend fun executeFeature(actor: CommandActor, feature: FeatureCommand, args: Array<out String>) {
+        val argument = feature.parse(args)
+        if (feature.playerOnly) actor.player()
+        when (readiness) {
+            Readiness.READY, Readiness.DEGRADED -> Unit
+            Readiness.STARTING -> throw CommandProblem("QuickStart is still starting. Try again shortly.")
+            else -> throw CommandProblem("QuickStart is unavailable. Ask an administrator to run /qs doctor.")
+        }
+        modules.withModule(feature.module) { module ->
+            if (actor.session != null) startup.recordFirstPlayerReady()
+            (module as CommandModule).execute(FeatureCall(feature, argument, actor, features))
+        }
+    }
+
+    override fun onTabComplete(sender: CommandSender, command: Command, alias: String, args: Array<out String>): List<String> {
+        if (command.name == "qs") return administration.complete(sender, args)
+        val feature = FeatureCommand.byId[command.name] ?: return emptyList()
+        if (feature.module !in config.enabledModules || args.size != 1) return emptyList()
+        return when (feature.argument) {
+            CommandArgument.REQUIRED_PLAYER, CommandArgument.OPTIONAL_PLAYER ->
+                players.names(args[0]).filterNot { it.equals(sender.name, ignoreCase = true) }
+            else -> emptyList()
+        }
+    }
+
+    suspend fun reload(): List<String> = reloadLock.withLock {
+        if (configurationFailure != null) throw CommandProblem("QuickStart failed to start. Fix config.yml and restart the server.")
+        val replacement = try {
+            scheduler.blocking { Configuration.load(configFile) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            configProblem = message(failure)
+            throw CommandProblem("Settings were kept. ${message(failure)}")
+        }
+        features = replacement.features
+        configProblem = null
+        val restart = buildList {
+            if (config.startup != replacement.startup) add("startup")
+            if (config.enabledModules != replacement.enabledModules) add("modules")
+            if (config.warmup != replacement.warmup) add("performance.warmup")
+        }
+        buildList {
+            add("Reloaded home, warp, spawn and teleportation settings.")
+            if (restart.isNotEmpty()) add("Restart required to apply ${restart.joinToString()}.")
+        }
+    }
+
+    suspend fun doctor(): List<String> = buildList {
+        add("QuickStart ${readiness.name.lowercase(Locale.ROOT)} (${config.startup})")
+        add(configProblem?.let { "Configuration error: $it" } ?: "Configuration valid.")
+        startupProblem?.let { add("Startup failure: $it") }
+        val statuses = modules()
+        val storageStatus = statuses.first { it.id == "storage" }
+        when (storageStatus.state) {
+            ModuleState.READY -> {
+                val storage = sqlite.value
+                val previous = storage.lastFailure
+                try {
+                    storage.health()
+                    add("SQLite read check passed. ${storage.timings.describe()}.")
+                } catch (failure: StorageFailure) {
+                    add("SQLite health check failed: ${message(failure)}")
+                }
+                previous?.let { add("Last SQLite failure (${it.at}, ${it.operation}): ${it.reason}") }
+            }
+            ModuleState.DISABLED -> add("SQLite is disabled because no enabled feature needs it.")
+            else -> add("SQLite state: ${storageStatus.state.name.lowercase(Locale.ROOT)}.")
+        }
+        statuses.filter { it.failure != null }.forEach { add("${it.id}: ${it.failure}") }
+        add("Feature commands: ${commands.describe()}.")
+    }
+
+    private suspend fun handleErrors(actor: CommandActor, action: suspend () -> Unit) {
+        try {
+            action()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: CommandProblem) {
+            actor.reply(message(failure))
+        } catch (failure: ModuleUnavailable) {
+            actor.reply(message(failure))
+        } catch (failure: StorageFailure) {
+            actor.reply(message(failure))
+        } catch (failure: EntityUnavailable) {
+            actor.reply(message(failure))
+        } catch (failure: Exception) {
+            report("Command", failure)
+            actor.reply("QuickStart could not complete the operation. See the server log.")
+        }
+    }
+
+    private fun report(context: String, failure: Throwable) {
+        plugin.logger.log(Level.SEVERE, "$context: ${message(failure)}", failure)
+    }
+
+    private fun message(failure: Throwable) = failure.message ?: failure.javaClass.simpleName
+}

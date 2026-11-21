@@ -1,11 +1,93 @@
 name: QuickStart
-description: A lightweight, modular, Folia-first essentials suite built for performance, reliability, and convenience.
+description: A lightweight, modular, Folia-first essentials suite.
 version: '${version}'
-
 main: io.github.Earth1283.quickStart.QuickStart
-paper-plugin-loader: io.github.Earth1283.quickStart.QuickStartLoader
 folia-supported: true
-api-version: '26.1.1'
+api-version: '26.1.2'
 load: STARTUP
-
-authors: [ Earth1283 ]
+authors: [Earth1283]
+commands:
+  qs:
+    description: Show QuickStart help and diagnostics.
+    usage: /<command> [help|modules|doctor|diagnostics startup|reload]
+  tpa:
+    description: Ask to teleport to another player.
+    usage: /<command> <player>
+    permission: quickstart.tpa
+  tpahere:
+    description: Ask another player to teleport to you.
+    usage: /<command> <player>
+    permission: quickstart.tpa
+  tpaccept:
+    description: Accept a teleport request.
+    usage: /<command> [player]
+    permission: quickstart.tpa
+  tpdeny:
+    description: Decline a teleport request.
+    usage: /<command> [player]
+    permission: quickstart.tpa
+  back:
+    description: Return to your previous location.
+    usage: /<command>
+    permission: quickstart.back
+  sethome:
+    description: Save a home at your current location.
+    usage: /<command> [name]
+    permission: quickstart.homes
+  home:
+    description: Teleport to a saved home.
+    usage: /<command> [name]
+    permission: quickstart.homes
+  delhome:
+    description: Delete a saved home.
+    usage: /<command> [name]
+    permission: quickstart.homes
+  homes:
+    description: List your saved homes.
+    usage: /<command>
+    permission: quickstart.homes
+  setwarp:
+    description: Save a server warp at your current location.
+    usage: /<command> <name>
+    permission: quickstart.warps.manage
+  warp:
+    description: Teleport to a server warp.
+    usage: /<command> <name>
+    permission: quickstart.warps
+  delwarp:
+    description: Delete a server warp.
+    usage: /<command> <name>
+    permission: quickstart.warps.manage
+  warps:
+    description: List the server warps you can use.
+    usage: /<command>
+    permission: quickstart.warps
+  setspawn:
+    description: Save the server spawn at your current location.
+    usage: /<command>
+    permission: quickstart.spawn.manage
+  spawn:
+    description: Teleport to the server spawn.
+    usage: /<command>
+    permission: quickstart.spawn
+permissions:
+  quickstart.admin:
+    description: Inspect and reload QuickStart settings.
+    default: op
+  quickstart.tpa:
+    default: true
+  quickstart.back:
+    default: true
+  quickstart.homes:
+    default: true
+  quickstart.warps:
+    default: true
+  quickstart.warps.manage:
+    default: op
+  quickstart.warps.bypass:
+    description: Access all warps when individual permissions are enabled.
+    default: op
+  quickstart.spawn:
+    default: true
+  quickstart.spawn.manage:
+    default: op

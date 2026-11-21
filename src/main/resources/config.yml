@@ -1,0 +1,42 @@
+# LAZY starts features on demand. ADHD also warms them up in the background.
+# ALL_AT_ONCE admits players after all enabled features are ready.
+startup: ADHD
+
+modules:
+  homes: true
+  warps: true
+  spawn: true
+  teleportation: true
+
+homes:
+  limit: 5
+
+warps:
+  # Require quickstart.warp.<name> to use or list each warp.
+  per-warp-permissions: false
+
+spawn:
+  # Send new players to the configured spawn once they join.
+  first-join: false
+
+teleportation:
+  cooldown-seconds: 5
+  request-expiration-seconds: 60
+
+# Advanced settings. Startup, modules, performance and storage require a restart.
+performance:
+  warmup:
+    enabled: true
+    empty-server-workers: 2
+    active-server-workers: 1
+    pause-optional-on-join: true
+
+storage:
+  backend: sqlite
+
+telemetry:
+  enabled: false
+
+scope-creep:
+  scripting:
+    enabled: false
