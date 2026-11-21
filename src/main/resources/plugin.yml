@@ -1,0 +1,11 @@
+name: QuickStart
+description: A lightweight, modular, Folia-first essentials suite built for performance, reliability, and convenience.
+version: '${version}'
+
+main: io.github.Earth1283.quickStart.QuickStart
+paper-plugin-loader: io.github.Earth1283.quickStart.QuickStartLoader
+folia-supported: true
+api-version: '26.1.1'
+load: STARTUP
+
+authors: [ Earth1283 ]
