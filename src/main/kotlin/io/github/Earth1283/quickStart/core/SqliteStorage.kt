@@ -76,6 +76,8 @@ internal class SqliteStorage(
 
     fun cachedPlayerNames(): List<String> = knownPlayerNames.values.toList()
 
+    fun knownPlayerName(id: UUID): String? = knownPlayerNames[id]
+
     suspend fun setRespectBedSpawn(id: UUID, value: Boolean?): PlayerPreferences =
         updatePreferences(id) { it.copy(respectBedSpawn = value) }
 
@@ -330,6 +332,45 @@ internal class SqliteStorage(
         }
     }
 
+    suspend fun recentModerationHistory(limit: Int, offset: Long): List<ModerationRecord> = query("read recent moderation history") { database ->
+        database.withStatement(
+            "SELECT scope, target, command, label, actor, recorded_at, reason, expires_at FROM moderation_history " +
+                "ORDER BY id DESC LIMIT ? OFFSET ?",
+        ) { statement ->
+            statement.setInt(1, limit)
+            statement.setLong(2, offset)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val target = SanctionTarget.decode(TargetKind.valueOf(rows.getString("scope")), rows.getString("target"))
+                        add(ModerationRecord(rows.getString("command"), target, rows.getString("label"), rows.getString("actor"),
+                            Instant.ofEpochMilli(rows.getLong("recorded_at")), rows.getString("reason"), rows.expiration()))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun moderationHistoryByActor(actor: String, limit: Int, offset: Long): List<ModerationRecord> = query("read actor moderation history") { database ->
+        database.withStatement(
+            "SELECT scope, target, command, label, actor, recorded_at, reason, expires_at FROM moderation_history " +
+                "WHERE actor = ? COLLATE NOCASE ORDER BY id DESC LIMIT ? OFFSET ?",
+        ) { statement ->
+            statement.setString(1, actor)
+            statement.setInt(2, limit)
+            statement.setLong(3, offset)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val target = SanctionTarget.decode(TargetKind.valueOf(rows.getString("scope")), rows.getString("target"))
+                        add(ModerationRecord(rows.getString("command"), target, rows.getString("label"), rows.getString("actor"),
+                            Instant.ofEpochMilli(rows.getLong("recorded_at")), rows.getString("reason"), rows.expiration()))
+                    }
+                }
+            }
+        }
+    }
+
     private fun Connection.recordModeration(record: ModerationRecord) {
         withStatement(
             "INSERT INTO moderation_history (scope, target, command, label, actor, recorded_at, reason, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -510,7 +551,7 @@ internal class SqliteStorage(
                     check(rows.next()) { "Unable to read SQLite schema version" }
                     rows.getInt(1)
                 }
-                check(version in 0..3) { "Unsupported SQLite schema version $version. Check the installed QuickStart version." }
+                check(version in 0..4) { "Unsupported SQLite schema version $version. Check the installed QuickStart version." }
                 if (version == 0) {
                     statement.executeUpdate(
                         """
@@ -599,7 +640,12 @@ internal class SqliteStorage(
                         ) WITHOUT ROWID, STRICT
                         """.trimIndent(),
                     )
-                    statement.executeUpdate("PRAGMA user_version = 3")
+                }
+                if (version < 4) {
+                    statement.executeUpdate(
+                        "CREATE INDEX IF NOT EXISTS moderation_history_actor ON moderation_history(actor COLLATE NOCASE, id DESC)",
+                    )
+                    statement.executeUpdate("PRAGMA user_version = 4")
                 }
             }
         }

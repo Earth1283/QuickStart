@@ -37,15 +37,19 @@ internal class Seen(
         val parsedId = parseUuid(query)
         val matchedOnline = (parsedId?.let(players::find) ?: players.find(query))?.takeIf(PlayerSession::active)
 
-        val (showDetails, canSeeOnline, modButtons) = actor.onOwner { sender ->
+        val (showDetails, canSeeOnline, modActions) = actor.onOwner { sender ->
             val details = sender.hasPermission("quickstart.seen.details")
             val visible = matchedOnline != null && (details || sender !is Player || sender.canSee(matchedOnline.player))
             val buttons = if (moderationEnabled) {
                 ModerationCommand.entries
                     .filter { it in inspectionButtons && sender.hasPermission(it.permission) }
             } else emptyList()
-            Triple(details, visible, buttons)
+            val canOpenMenu = moderationEnabled && ModerationCommand.entries.any {
+                it.action != ModerationAction.LIST && sender.hasPermission(it.permission)
+            }
+            Triple(details, visible, buttons to canOpenMenu)
         }
+        val (modButtons, canOpenMenu) = modActions
 
         val now = Instant.now()
         if (matchedOnline != null && canSeeOnline) {
@@ -64,7 +68,7 @@ internal class Seen(
                     if (moderationEnabled && storage.sanctions.find(SanctionKind.MUTE, matchedOnline.id, matchedOnline.address) != null) {
                         add(Message("seen.muted"))
                     }
-                    staffActions(modButtons, matchedOnline.name)?.let(::add)
+                    staffActions(modButtons, canOpenMenu, matchedOnline.name)?.let(::add)
                 }
             }
             actor.reply(replies)
@@ -96,7 +100,7 @@ internal class Seen(
                         if (storage.sanctions.find(SanctionKind.BAN, profile.id, ip) != null) add(Message("seen.banned"))
                         if (storage.sanctions.find(SanctionKind.MUTE, profile.id, ip) != null) add(Message("seen.muted"))
                     }
-                    staffActions(modButtons, profile.id.toString())?.let(::add)
+                    staffActions(modButtons, canOpenMenu, profile.id.toString(), profile.name)?.let(::add)
                 }
             }
             actor.reply(replies)
@@ -125,7 +129,7 @@ internal class Seen(
                     if (storage.sanctions.find(SanctionKind.BAN, id, null) != null) add(Message("seen.banned"))
                     if (storage.sanctions.find(SanctionKind.MUTE, id, null) != null) add(Message("seen.muted"))
                 }
-                staffActions(modButtons, id.toString())?.let(::add)
+                staffActions(modButtons, canOpenMenu, id.toString(), name)?.let(::add)
             }
         }
         actor.reply(replies)
@@ -141,22 +145,37 @@ internal class Seen(
         null
     }
 
-    private fun staffActions(commands: List<ModerationCommand>, target: String): Message? {
-        if (commands.isEmpty()) return null
-        val buttons = commands.map { command ->
-            val key = when (command) {
-                ModerationCommand.ALTS -> "alts"
-                ModerationCommand.BANSTATUS -> "status"
-                ModerationCommand.MODHISTORY -> "history"
-                else -> command.id
+    private fun staffActions(
+        commands: List<ModerationCommand>,
+        canOpenMenu: Boolean,
+        target: String,
+        menuTarget: String = target,
+    ): Message? {
+        val buttons = buildList {
+            for (command in commands) {
+                val key = when (command) {
+                    ModerationCommand.ALTS -> "alts"
+                    ModerationCommand.BANSTATUS -> "status"
+                    ModerationCommand.MODHISTORY -> "history"
+                    else -> command.id
+                }
+                val value = "${command.id} $target"
+                add(Message("ui.control", "action" to ChatAction(
+                    value,
+                    Message("moderation.buttons.$key"),
+                    Message("moderation.buttons.hover", "command" to value),
+                )))
             }
-            val value = "${command.id} $target"
-            Message("ui.control", "action" to ChatAction(
-                value,
-                Message("moderation.buttons.$key"),
-                Message("moderation.buttons.hover", "command" to value),
-            ))
+            if (canOpenMenu) {
+                val value = "qs mod $menuTarget"
+                add(Message("ui.control", "action" to ChatAction(
+                    value,
+                    Message("moderation.buttons.moderate"),
+                    Message("moderation.buttons.hover", "command" to value),
+                )))
+            }
         }
+        if (buttons.isEmpty()) return null
         return Message("ui.action-row", "actions" to MessageGroup(buttons, Component.text("  ")))
     }
 

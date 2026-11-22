@@ -221,6 +221,48 @@ class SqliteStorageTest {
         }
     }
 
+    @Test
+    fun `version three migrates to version four and supports global and actor moderation history plus active lists`() = runBlocking {
+        val file = directory.resolve("v4-migration.db")
+        val alexId = UUID.randomUUID()
+        val steveId = UUID.randomUUID()
+        val t1 = Instant.ofEpochMilli(1_700_000_000_000L)
+        val t2 = t1.plusSeconds(60)
+        val t3 = t2.plusSeconds(60)
+
+        useStorage(file) { storage ->
+            storage.recordPlayerJoin(alexId, "Alex", "192.0.2.10", t1)
+            storage.recordPlayerJoin(steveId, "Steve", "198.51.100.20", t1)
+        }
+        SQLiteDataSource().apply { url = "jdbc:sqlite:$file" }.connection.use { database ->
+            database.createStatement().use { statement ->
+                statement.execute("DROP INDEX IF EXISTS moderation_history_actor")
+                statement.execute("PRAGMA user_version = 3")
+            }
+        }
+
+        val alexTarget = SanctionTarget.Account(alexId)
+        val steveTarget = SanctionTarget.Account(steveId)
+        val banRecord = ModerationRecord("ban", alexTarget, "Alex", "AdminOne", t1, "Griefing")
+        val muteRecord = ModerationRecord("mute", steveTarget, "Steve", "ModTwo", t2, "Spam")
+        val unbanRecord = ModerationRecord("unban", alexTarget, "Alex", "AdminOne", t3, "Appeal accepted")
+
+        useStorage(file) { storage ->
+            assertEquals("Alex", storage.knownPlayerName(alexId))
+            storage.loadSanctions()
+            assertTrue(storage.saveSanction(Sanction(SanctionKey(SanctionKind.BAN, alexTarget), "Griefing", null), banRecord, true))
+            assertTrue(storage.saveSanction(Sanction(SanctionKey(SanctionKind.MUTE, steveTarget), "Spam", null), muteRecord, true))
+            assertEquals(1, storage.sanctions.allActive(SanctionKind.BAN).size)
+            assertEquals(1, storage.sanctions.allActive(SanctionKind.MUTE).size)
+            assertTrue(storage.deleteSanction(SanctionKey(SanctionKind.BAN, alexTarget), unbanRecord))
+            assertTrue(storage.sanctions.allActive(SanctionKind.BAN).isEmpty())
+
+            assertEquals(listOf(unbanRecord, muteRecord, banRecord), storage.recentModerationHistory(10, 0))
+            assertEquals(listOf(unbanRecord, banRecord), storage.moderationHistoryByActor("adminone", 10, 0))
+            assertEquals(listOf(muteRecord), storage.moderationHistoryByActor("ModTwo", 10, 0))
+        }
+    }
+
     private suspend fun useStorage(file: Path, work: suspend (SqliteStorage) -> Unit) {
         val storage = SqliteStorage(file) { throw AssertionError("Storage shutdown failed", it) }
         try {

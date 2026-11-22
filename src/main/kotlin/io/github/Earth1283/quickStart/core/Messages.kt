@@ -1,7 +1,9 @@
 package io.github.Earth1283.quickStart.core
 
+import io.github.Earth1283.quickStart.features.ModerationCommand
 import java.io.File
 import java.io.Reader
+import java.util.Locale
 import java.util.UUID
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.JoinConfiguration
@@ -28,22 +30,65 @@ internal data class ChatAction(
     val consoleText: String = "/${command.trimEnd()}",
 )
 
+internal data class MessagesLoadResult(
+    val messages: Messages,
+    val warnings: List<String>,
+    val overrideCount: Int,
+)
+
 internal class Messages private constructor(private val templates: Map<String, String>) {
-    fun withOverrides(file: File): Messages {
-        if (!file.exists()) return this
+    fun withOverrides(file: File): Messages = withOverridesWithDiagnostics(file).messages
+
+    fun withOverridesWithDiagnostics(file: File): MessagesLoadResult {
+        if (!file.exists()) return MessagesLoadResult(this, emptyList(), 0)
         val yaml = YamlConfiguration().apply { load(file) }
-        val overrides = templates.mapNotNull { (key, default) ->
-            val value = yaml.get(key) ?: return@mapNotNull null
-            require(value is String) { "$key must be a MiniMessage string." }
-            if (value == default) return@mapNotNull null
+        val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
+        val overrides = mutableMapOf<String, String>()
+
+        for ((key, default) in templates) {
+            val value = yaml.get(key) ?: continue
+            if (value !is String) {
+                errors.add("$key must be a MiniMessage string.")
+                continue
+            }
+            if (value == default) continue
             try {
                 miniMessage.deserialize(value)
             } catch (failure: IllegalArgumentException) {
-                throw IllegalArgumentException("$key: ${failure.message}", failure)
+                errors.add("$key: ${failure.message}")
+                continue
             }
-            key to value
+            val expectedPlaceholders = extractPlaceholders(default)
+            val tagError = validateQuickstartTags(key, value, expectedPlaceholders)
+            if (tagError != null) {
+                errors.add(tagError)
+                continue
+            }
+            val actualPlaceholders = extractPlaceholders(value)
+            val missing = expectedPlaceholders - actualPlaceholders
+            if (missing.isNotEmpty()) {
+                warnings.add("message.yml '$key' omits placeholder(s): ${missing.sorted().joinToString(", ") { "<$it>" }}")
+            }
+            overrides[key] = value
         }
-        return if (overrides.isEmpty()) this else Messages(templates + overrides)
+
+        if (errors.isNotEmpty()) {
+            throw IllegalArgumentException(errors.joinToString("; "))
+        }
+
+        for (path in collectLeafPaths(yaml)) {
+            if (path !in templates) {
+                val suggestion = closestKey(path, templates.keys)
+                warnings.add(
+                    if (suggestion != null) "Unknown message key '$path' (did you mean '$suggestion'?)"
+                    else "Unknown message key '$path'",
+                )
+            }
+        }
+
+        val catalog = if (overrides.isEmpty()) this else Messages(templates + overrides)
+        return MessagesLoadResult(catalog, warnings, overrides.size)
     }
 
     fun render(message: Message, interactive: Boolean = true): Component {
@@ -64,7 +109,7 @@ internal class Messages private constructor(private val templates: Map<String, S
         }
         tags.resolver(TagResolver.resolver("quickstart") { args, context ->
             val command = args.popOr("Expected a QuickStart command name").value()
-            if (command != "qs" && command !in FeatureCommand.byId) {
+            if (!isKnownCommand(command)) {
                 throw context.newException("Unknown QuickStart command: $command", args)
             }
             val name = args.popOr("Expected a text placeholder name").value()
@@ -90,6 +135,43 @@ internal class Messages private constructor(private val templates: Map<String, S
     companion object {
         private val requestResponses = setOf("tpaccept", "tpdeny")
         private val miniMessage = MiniMessage.miniMessage()
+        private val quickstartTagPattern = Regex("<quickstart(?::([^:>]*))?(?::([^:>]*))?(?::[^>]*)?>")
+        private val simpleTagPattern = Regex("(?<!\\\\)<([a-z][a-z0-9_-]*)>")
+        private val standardTags = setOf(
+            "black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple",
+            "gold", "gray", "grey", "dark_gray", "dark_grey", "blue", "green", "aqua",
+            "red", "light_purple", "yellow", "white",
+            "bold", "b", "italic", "i", "em", "underlined", "u", "strikethrough", "st",
+            "obfuscated", "obf", "reset", "newline", "br", "rainbow", "gradient",
+        )
+
+        private fun isKnownCommand(command: String): Boolean =
+            command == "qs" || command in FeatureCommand.byId || command in ModerationCommand.byId
+
+        private fun validateQuickstartTags(key: String, template: String, expectedPlaceholders: Set<String>): String? {
+            for (match in quickstartTagPattern.findAll(template)) {
+                val command = match.groupValues[1]
+                val placeholder = match.groupValues[2]
+                if (command.isEmpty()) return "$key: <quickstart> tag requires a command name."
+                if (!isKnownCommand(command)) return "$key: unknown QuickStart command '$command' in <quickstart> tag."
+                if (placeholder.isEmpty()) return "$key: <quickstart:$command> tag requires a placeholder name."
+                if (expectedPlaceholders.isNotEmpty() && placeholder !in expectedPlaceholders) {
+                    return "$key: unknown placeholder '$placeholder' in <quickstart:$command:$placeholder> tag."
+                }
+            }
+            return null
+        }
+
+        internal fun extractPlaceholders(template: String): Set<String> = buildSet {
+            for (match in simpleTagPattern.findAll(template)) {
+                val tag = match.groupValues[1].lowercase(Locale.ROOT)
+                if (tag !in standardTags) add(tag)
+            }
+            for (match in quickstartTagPattern.findAll(template)) {
+                val placeholder = match.groupValues[2].lowercase(Locale.ROOT)
+                if (placeholder.isNotEmpty()) add(placeholder)
+            }
+        }
 
         fun loadDefaults(reader: Reader): Messages {
             val yaml = YamlConfiguration().apply { load(reader) }

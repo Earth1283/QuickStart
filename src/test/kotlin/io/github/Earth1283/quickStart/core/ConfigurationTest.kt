@@ -88,6 +88,96 @@ class ConfigurationTest {
         assertTrue(overrides.strictTpahere)
     }
 
+    @Test
+    fun `bundled default config has no warnings or missing expected keys`() {
+        val bundled = checkNotNull(javaClass.getResourceAsStream("/config.yml"))
+            .reader(Charsets.UTF_8).use { YamlConfiguration.loadConfiguration(it) }
+        val result = Configuration.parseWithDiagnostics(bundled)
+        assertTrue(result.warnings.isEmpty(), "Unexpected warnings: ${result.warnings}")
+        assertTrue(result.missingKeys.isEmpty(), "Unexpected missing keys: ${result.missingKeys}")
+    }
+
+    @Test
+    fun `multiple config errors are collected together`() {
+        val failure = assertFailsWith<ConfigurationException> {
+            parse("""
+                startup: soon
+                homes:
+                  limit: 0
+                moderation:
+                  min-ipv4-cidr-prefix: 99
+                  require-reason-for:
+                    - notacommand
+            """.trimIndent())
+        }
+        assertEquals(4, failure.errors.size)
+        assertTrue(failure.errors.any { "startup" in it })
+        assertTrue(failure.errors.any { "homes.limit" in it })
+        assertTrue(failure.errors.any { "min-ipv4-cidr-prefix" in it })
+        assertTrue(failure.errors.any { "notacommand" in it })
+    }
+
+    @Test
+    fun `unknown keys produce warnings with typo suggestions and missing keys are reported`() {
+        val yaml = YamlConfiguration().apply {
+            loadFromString("""
+                startup: ADHD
+                warps:
+                  per-warp-permission: true
+                custom-typo: 123
+            """.trimIndent())
+        }
+        val result = Configuration.parseWithDiagnostics(yaml)
+        assertTrue(result.warnings.any {
+            "warps.per-warp-permission" in it && "warps.per-warp-permissions" in it
+        }, "Expected suggestion warning, got: ${result.warnings}")
+        assertTrue(result.warnings.any { "custom-typo" in it })
+        assertTrue("homes.limit" in result.missingKeys)
+        assertFalse("startup" in result.missingKeys)
+    }
+
+    @Test
+    fun `moderation settings parse custom values and diff reports changes`() {
+        val defaults = parse("").features
+        val custom = parse("""
+            homes:
+              limit: 12
+            moderation:
+              broadcast-to-staff: false
+              log-to-console: false
+              max-reason-length: 512
+              require-reason-for:
+                - ban
+                - tempban
+                - kick
+              min-ipv4-cidr-prefix: 20
+              min-ipv6-cidr-prefix: 48
+              muted-commands:
+                - msg
+                - /party
+              reason-presets:
+                - Spam
+                - Griefing
+        """.trimIndent()).features
+
+        assertFalse(custom.moderation.broadcastToStaff)
+        assertFalse(custom.moderation.logToConsole)
+        assertEquals(512, custom.moderation.maxReasonLength)
+        assertEquals(setOf("ban", "tempban", "kick"), custom.moderation.requireReasonFor)
+        assertEquals(20, custom.moderation.minIpv4CidrPrefix)
+        assertEquals(48, custom.moderation.minIpv6CidrPrefix)
+        assertEquals(setOf("msg", "party"), custom.moderation.mutedCommands)
+        assertEquals(listOf("Spam", "Griefing"), custom.moderation.reasonPresets)
+
+        val diff = defaults.diff(custom)
+        val changedKeys = diff.map(SettingChange::key).toSet()
+        assertTrue("homes.limit" in changedKeys)
+        assertTrue("moderation.broadcast-to-staff" in changedKeys)
+        assertTrue("moderation.min-ipv4-cidr-prefix" in changedKeys)
+        assertTrue("moderation.muted-commands" in changedKeys)
+        assertTrue(defaults.diff(defaults).isEmpty())
+    }
+
     private fun parse(content: String): Configuration =
         Configuration.parse(YamlConfiguration().apply { loadFromString(content) })
 }

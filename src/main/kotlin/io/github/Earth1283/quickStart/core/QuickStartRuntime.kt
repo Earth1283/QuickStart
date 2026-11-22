@@ -63,6 +63,8 @@ internal class QuickStartRuntime(
     internal val config: Configuration,
     private val configurationFailure: Throwable?,
     enabledAt: TimeSource.Monotonic.ValueTimeMark,
+    initialConfigWarnings: List<String> = emptyList(),
+    initialMissingConfigKeys: List<String> = emptyList(),
 ) : QuickStartApi, Listener, TabExecutor {
     private data class ReloadableSettings(val features: FeatureSettings, val messages: Messages)
 
@@ -103,9 +105,13 @@ internal class QuickStartRuntime(
     @Volatile private var settings = ReloadableSettings(config.features, defaultMessages)
     private val features get() = settings.features
     private val messages get() = settings.messages
-    @Volatile private var configProblem = configurationFailure?.let(::message)
+    @Volatile private var configErrors: List<String> = extractConfigErrors(configurationFailure)
+    @Volatile private var configWarnings: List<String> = initialConfigWarnings
+    @Volatile private var missingConfigKeys: List<String> = initialMissingConfigKeys
     @Volatile private var messageProblem: String? = null
+    @Volatile private var messageWarnings: List<String> = emptyList()
     @Volatile private var startupProblem: String? = null
+    @Volatile private var lastDiskConfig: Configuration = config
     internal val startup = StartupMeasurements(enabledAt)
     internal val commands = LatencyMeasurements()
     private val administration = Administration(this)
@@ -128,7 +134,17 @@ internal class QuickStartRuntime(
         return listOf(
             storage,
             ModuleDefinition("moderation", moderationEnabled, critical = true, required = listOf("storage")) { moduleScope ->
-                Moderation(sqlite.value, players, scheduler, plugin.server, moduleScope, { messages.render(it) }, ::submitDialog)
+                Moderation(
+                    sqlite.value,
+                    players,
+                    scheduler,
+                    plugin.server,
+                    moduleScope,
+                    { messages.render(it) },
+                    ::submitDialog,
+                    { features.moderation },
+                    { plugin.logger.info(it) },
+                )
             },
             feature("teleportation") { Teleportation(players, scheduler, teleports, checkNotNull(backHistory), ::storage) },
             feature("homes") { Homes(sqlite.value, teleports) },
@@ -141,13 +157,21 @@ internal class QuickStartRuntime(
     fun start() {
         try {
             if (messageFile.exists()) {
-                settings = settings.copy(messages = defaultMessages.withOverrides(messageFile))
+                val loaded = defaultMessages.withOverridesWithDiagnostics(messageFile)
+                settings = settings.copy(messages = loaded.messages)
+                messageWarnings = loaded.warnings
+                for (warning in loaded.warnings) {
+                    plugin.componentLogger.warn(startupText(warning, NamedTextColor.GOLD))
+                }
             } else {
                 plugin.saveResource(messageFile.name, false)
             }
         } catch (failure: Exception) {
             messageProblem = message(failure)
             plugin.componentLogger.warn(startupText("Could not load message.yml. Using default messages.", NamedTextColor.GOLD), failure)
+        }
+        for (warning in configWarnings) {
+            plugin.componentLogger.warn(startupText(warning, NamedTextColor.GOLD))
         }
         val server = plugin.server
         server.pluginManager.registerEvents(this, plugin)
@@ -311,8 +335,8 @@ internal class QuickStartRuntime(
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onChatCommand(event: PlayerCommandPreprocessEvent) {
-        if (!Moderation.isChatCommand(event.message)) return
         val moderation = moderation() ?: return
+        if (!moderation.isMutedCommand(event.message)) return
         val session = players.session(event.player) ?: return
         val notice = moderation.muteNotice(session) ?: return
         event.isCancelled = true
@@ -532,44 +556,188 @@ internal class QuickStartRuntime(
         }
     }
 
-    suspend fun reload(): List<Message> = reloadLock.withLock {
-        if (configurationFailure != null) throw CommandProblem("reload.startup-failed")
-        val replacement = try {
-            scheduler.blocking { Configuration.load(configFile) }
+    suspend fun reload(dryRun: Boolean = false): List<Message> = reloadLock.withLock {
+        if (!dryRun && configurationFailure != null) throw CommandProblem("reload.startup-failed")
+        val loadedConfig = try {
+            scheduler.blocking { Configuration.loadWithDiagnostics(configFile) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            configProblem = message(failure)
-            throw CommandProblem("reload.invalid-config", "detail" to message(failure))
+            val errors = extractConfigErrors(failure)
+            if (!dryRun) configErrors = errors
+            return@withLock buildList {
+                add(Message(if (dryRun) "reload.check-failed" else "reload.invalid-config-header"))
+                for (error in errors) add(Message("reload.error-item", "detail" to error))
+            }
         }
-        configProblem = null
-        val replacementMessages = try {
-            scheduler.blocking { defaultMessages.withOverrides(messageFile) }
+        val loadedMessages = try {
+            scheduler.blocking { defaultMessages.withOverridesWithDiagnostics(messageFile) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            messageProblem = message(failure)
-            throw CommandProblem("reload.invalid-messages", "detail" to message(failure))
+            val detail = message(failure)
+            if (!dryRun) messageProblem = detail
+            throw CommandProblem("reload.invalid-messages", "detail" to detail)
         }
-        messageProblem = null
-        settings = ReloadableSettings(replacement.features, replacementMessages)
-        val restart = buildList {
-            if (config.startup != replacement.startup) add("startup")
-            if (config.enabledModules != replacement.enabledModules) add("modules")
-            if (config.warmup != replacement.warmup) add("performance.warmup")
-            if (config.maxPendingOperations != replacement.maxPendingOperations) add("storage.max-pending-operations")
+
+        val replacement = loadedConfig.configuration
+        val changes = features.diff(replacement.features)
+        val restart = restartRequiredFields(replacement)
+        val allWarnings = loadedConfig.warnings + loadedMessages.warnings
+
+        if (!dryRun) {
+            configErrors = emptyList()
+            configWarnings = loadedConfig.warnings
+            missingConfigKeys = loadedConfig.missingKeys
+            messageProblem = null
+            messageWarnings = loadedMessages.warnings
+            lastDiskConfig = replacement
+            settings = ReloadableSettings(replacement.features, loadedMessages.messages)
         }
+
         buildList {
-            add(Message("reload.success"))
+            if (dryRun) {
+                add(Message("reload.check-valid", "overrides" to loadedMessages.overrideCount))
+                if (configurationFailure != null) add(Message("reload.check-startup-restart"))
+            } else {
+                add(Message("reload.success"))
+            }
+            if (changes.isNotEmpty()) {
+                val summary = changes.joinToString(", ") { "${it.key} (${it.before} -> ${it.after})" }
+                add(Message(if (dryRun) "reload.check-changes" else "reload.changes", "changes" to summary))
+            } else {
+                add(Message(if (dryRun) "reload.check-no-changes" else "reload.no-changes"))
+            }
             if (restart.isNotEmpty()) add(Message("reload.restart-required", "settings" to restart.joinToString()))
+            for (warning in allWarnings) add(Message("reload.warning", "detail" to warning))
+            if (loadedConfig.missingKeys.isNotEmpty()) {
+                val preview = loadedConfig.missingKeys.take(5).joinToString(", ") +
+                    if (loadedConfig.missingKeys.size > 5) ", ..." else ""
+                add(Message("reload.missing-keys", "count" to loadedConfig.missingKeys.size, "keys" to preview))
+            }
         }
+    }
+
+    suspend fun inspectConfig(section: String?): List<Message> {
+        val disk = runCatching { scheduler.blocking { Configuration.loadWithDiagnostics(configFile) } }.getOrNull()
+        val diskCfg = disk?.configuration ?: lastDiskConfig
+        val liveFeatures = features
+        val restart = restartRequiredFields(diskCfg)
+        if (section == null) {
+            return buildList {
+                add(Message("config.heading"))
+                add(Message("config.summary", "startup" to config.startup, "modules" to config.enabledModules.sorted().joinToString(", ").ifEmpty { "none" }))
+                if (restart.isNotEmpty()) {
+                    add(Message("config.pending-restart", "settings" to restart.joinToString()))
+                }
+                val warnings = (disk?.warnings ?: configWarnings) + messageWarnings
+                if (warnings.isNotEmpty()) {
+                    add(Message("config.warning-count", "count" to warnings.size))
+                }
+                val missing = disk?.missingKeys ?: missingConfigKeys
+                if (missing.isNotEmpty()) {
+                    add(Message("config.missing-count", "count" to missing.size))
+                }
+                val buttons = Administration.configSections.map { sec ->
+                    Message("ui.control", "action" to ChatAction(
+                        "qs config $sec",
+                        Message("config.section-button", "section" to sec),
+                        Message("config.section-hover", "section" to sec),
+                    ))
+                }
+                for (row in buttons.chunked(4)) {
+                    add(Message("ui.action-row", "actions" to MessageGroup(row, Component.text("  "))))
+                }
+            }
+        }
+        return buildList {
+            add(Message("config.section-heading", "section" to section))
+            fun line(key: String, value: Any, diskValue: Any? = null) {
+                if (diskValue != null && diskValue != value) {
+                    add(Message("config.entry-pending", "key" to key, "value" to value.toString(), "disk" to diskValue.toString()))
+                } else {
+                    add(Message("config.entry", "key" to key, "value" to value.toString()))
+                }
+            }
+            when (section) {
+                "startup" -> line("startup", config.startup, diskCfg.startup)
+                "modules" -> {
+                    for (id in Configuration.featureIds) {
+                        line("modules.$id", id in config.enabledModules, id in diskCfg.enabledModules)
+                    }
+                }
+                "homes" -> {
+                    line("homes.limit", liveFeatures.homeLimit)
+                    line("homes.cooldown-seconds", liveFeatures.homeCooldownSeconds)
+                    line("homes.name-max-length", liveFeatures.homeNameMaxLength)
+                }
+                "warps" -> {
+                    line("warps.per-warp-permissions", liveFeatures.perWarpPermissions)
+                    line("warps.cooldown-seconds", liveFeatures.warpCooldownSeconds)
+                    line("warps.name-max-length", liveFeatures.warpNameMaxLength)
+                }
+                "spawn" -> {
+                    line("spawn.first-join", liveFeatures.firstJoinSpawn)
+                    line("spawn.on-respawn", liveFeatures.spawnOnRespawn)
+                    line("spawn.respect-bed-spawn", liveFeatures.respectBedSpawn)
+                    line("spawn.on-join", liveFeatures.spawnOnJoin)
+                    line("spawn.cooldown-seconds", liveFeatures.spawnCooldownSeconds)
+                }
+                "teleportation" -> {
+                    line("teleportation.warmup-seconds", liveFeatures.teleportWarmupSeconds)
+                    line("teleportation.request-send-cooldown-seconds", liveFeatures.requestSendCooldownSeconds)
+                    line("teleportation.request-teleport-cooldown-seconds", liveFeatures.requestTeleportCooldownSeconds)
+                    line("teleportation.back-cooldown-seconds", liveFeatures.backCooldownSeconds)
+                    line("teleportation.request-expiration-seconds", liveFeatures.requestExpirationSeconds)
+                    line("teleportation.strict-tpahere", liveFeatures.strictTpahere)
+                    line("teleportation.back-on-death", liveFeatures.backOnDeath)
+                    line("teleportation.back-on-teleport", liveFeatures.backOnTeleport)
+                    line("teleportation.safe-teleport", liveFeatures.safeTeleport)
+                }
+                "moderation" -> {
+                    val mod = liveFeatures.moderation
+                    line("moderation.broadcast-to-staff", mod.broadcastToStaff)
+                    line("moderation.log-to-console", mod.logToConsole)
+                    line("moderation.max-reason-length", mod.maxReasonLength)
+                    line("moderation.require-reason-for", mod.requireReasonFor.sorted().joinToString(", ").ifEmpty { "none" })
+                    line("moderation.min-ipv4-cidr-prefix", "/${mod.minIpv4CidrPrefix}")
+                    line("moderation.min-ipv6-cidr-prefix", "/${mod.minIpv6CidrPrefix}")
+                    line("moderation.muted-commands", mod.mutedCommands.sorted().joinToString(", ").ifEmpty { "none" })
+                    line("moderation.reason-presets", "${mod.reasonPresets.size} configured")
+                }
+                "performance" -> {
+                    line("performance.warmup.enabled", config.warmup.enabled, diskCfg.warmup.enabled)
+                    line("performance.warmup.empty-server-workers", config.warmup.emptyServerWorkers, diskCfg.warmup.emptyServerWorkers)
+                    line("performance.warmup.active-server-workers", config.warmup.activeServerWorkers, diskCfg.warmup.activeServerWorkers)
+                    line("performance.warmup.pause-optional-on-join", config.warmup.pauseOnJoin, diskCfg.warmup.pauseOnJoin)
+                }
+                "storage" -> {
+                    line("storage.backend", "sqlite")
+                    line("storage.max-pending-operations", config.maxPendingOperations, diskCfg.maxPendingOperations)
+                }
+            }
+        }
+    }
+
+    private fun restartRequiredFields(replacement: Configuration): List<String> = buildList {
+        if (config.startup != replacement.startup) add("startup")
+        if (config.enabledModules != replacement.enabledModules) add("modules")
+        if (config.warmup != replacement.warmup) add("performance.warmup")
+        if (config.maxPendingOperations != replacement.maxPendingOperations) add("storage.max-pending-operations")
     }
 
     suspend fun doctor(): List<Message> = buildList {
         add(Message("doctor.readiness", "state" to readiness.name.lowercase(Locale.ROOT), "strategy" to config.startup))
         startupProblem?.let { add(Message("doctor.startup-failure", "detail" to it)) }
-        configProblem?.let { add(Message("doctor.config-error", "detail" to it)) }
+        for (error in configErrors) add(Message("doctor.config-error", "detail" to error))
         messageProblem?.let { add(Message("doctor.message-error", "detail" to it)) }
+        for (warning in configWarnings) add(Message("doctor.config-warning", "detail" to warning))
+        for (warning in messageWarnings) add(Message("doctor.message-warning", "detail" to warning))
+        if (missingConfigKeys.isNotEmpty()) {
+            val preview = missingConfigKeys.take(5).joinToString(", ") +
+                if (missingConfigKeys.size > 5) ", ..." else ""
+            add(Message("doctor.config-missing-keys", "count" to missingConfigKeys.size, "keys" to preview))
+        }
         val statuses = modules()
         statuses.forEach { module ->
             module.failure?.let { add(Message("doctor.module-failed", "module" to module.id, "detail" to it)) }
@@ -592,8 +760,14 @@ internal class QuickStartRuntime(
             ModuleState.DISABLED -> add(Message("doctor.sqlite-disabled"))
             else -> add(Message("doctor.sqlite-state", "state" to storageStatus.state.name.lowercase(Locale.ROOT)))
         }
-        if (configProblem == null) add(Message("doctor.config-valid"))
+        if (configErrors.isEmpty()) add(Message("doctor.config-valid"))
         add(Message("doctor.commands", "timings" to commands.describe()))
+    }
+
+    private fun extractConfigErrors(failure: Throwable?): List<String> = when (failure) {
+        null -> emptyList()
+        is ConfigurationException -> failure.errors
+        else -> listOf(message(failure))
     }
 
     private suspend fun handleErrors(actor: CommandActor, action: suspend () -> Unit) {

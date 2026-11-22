@@ -50,6 +50,8 @@ internal fun parseIp(value: String): InetAddress? = try {
 
 @ConsistentCopyVisibility
 internal data class IpNetwork private constructor(private val base: InetAddress, val prefix: Int) {
+    val isIpv6: Boolean get() = base.address.size == 16
+
     fun contains(address: InetAddress): Boolean {
         val network = base.address
         val candidate = address.address
@@ -145,16 +147,30 @@ internal class SanctionIndex {
         }
     }
 
-    fun targetValues(kind: SanctionKind, scope: TargetKind?, now: Instant = Instant.now()): List<String> = buildList {
+    fun targetValues(kind: SanctionKind, scope: TargetKind?, now: Instant = Instant.now()): List<String> =
+        activeTargets(kind, scope, now).map(SanctionTarget::value)
+
+    fun activeTargets(kind: SanctionKind, scope: TargetKind?, now: Instant = Instant.now()): List<SanctionTarget> = buildList {
         if (scope != TargetKind.RANGE) {
             for ((key, sanction) in exact) {
                 if (key.kind == kind && (scope == null || key.target.kind == scope) && sanction.active(now)) {
-                    add(key.target.value)
+                    add(key.target)
                 }
             }
         }
         if (kind == SanctionKind.BAN && (scope == null || scope == TargetKind.RANGE)) {
-            for ((network, sanction) in ranges) if (sanction.active(now)) add(network.toString())
+            for ((network, sanction) in ranges) if (sanction.active(now)) add(SanctionTarget.Range(network))
         }
     }
+
+    fun allActive(kind: SanctionKind, now: Instant = Instant.now()): List<Sanction> = buildList {
+        for ((key, sanction) in exact) {
+            if (key.kind == kind && sanction.active(now)) add(sanction)
+        }
+        if (kind == SanctionKind.BAN) {
+            for ((_, sanction) in ranges) {
+                if (sanction.active(now)) add(sanction)
+            }
+        }
+    }.sortedWith(compareBy<Sanction>({ it.key.target.kind.ordinal }, { it.key.target.value }))
 }

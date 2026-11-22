@@ -158,4 +158,51 @@ class MessagesTest {
         assertTrue(plain.serialize(altEntry).contains("Steve [Banned]"))
         assertTrue(plain.serialize(altEntry).contains("192.0.2.10"))
     }
+
+    @Test
+    fun `unknown message keys and dropped placeholders produce warnings while invalid quickstart tags fail load`() {
+        val file = directory.resolve("message.yml")
+        file.writeText("""
+            homes:
+              saved: "<green>Home saved without name placeholder!</green>"
+              save: "<green>Typo key</green>"
+        """.trimIndent())
+        val result = defaults.withOverridesWithDiagnostics(file)
+        assertEquals(1, result.overrideCount)
+        assertTrue(result.warnings.any { "homes.saved" in it && "<name>" in it }, "Got: ${result.warnings}")
+        assertTrue(result.warnings.any { "homes.save" in it && "homes.saved" in it }, "Got: ${result.warnings}")
+
+        file.writeText("""
+            homes:
+              item: "<quickstart:nonexistent:name>Click</quickstart>"
+        """.trimIndent())
+        assertFailsWith<IllegalArgumentException> { defaults.withOverridesWithDiagnostics(file) }
+
+        file.writeText("""
+            homes:
+              item: "<quickstart:home:bogus>Click</quickstart>"
+        """.trimIndent())
+        assertFailsWith<IllegalArgumentException> { defaults.withOverridesWithDiagnostics(file) }
+    }
+
+    @Test
+    fun `new admin, moderation list, notify, and config templates render cleanly`() {
+        assertTrue(plain.serialize(defaults.render(Message("usage.qs"))).contains("config"))
+        assertTrue(plain.serialize(defaults.render(Message("usage.qs"))).contains("mod <target>"))
+        assertTrue(plain.serialize(defaults.render(Message("moderation.notify.applied",
+            "actor" to "Admin", "command" to "ban", "target" to "Griefer", "reason" to "TNT", "expiration" to "Never")))
+            .contains("Admin ran /ban on Griefer"))
+        assertTrue(plain.serialize(defaults.render(Message("moderation.list.bans-heading",
+            "count" to 3, "page" to 1, "pages" to 1))).contains("Active bans (3 total"))
+        assertTrue(plain.serialize(defaults.render(Message("moderation.history.heading-recent", "page" to 1)))
+            .contains("Recent moderation history"))
+        assertTrue(plain.serialize(defaults.render(Message("moderation.history.heading-actor", "actor" to "Admin", "page" to 2)))
+            .contains("Moderation history by Admin"))
+        assertTrue(plain.serialize(defaults.render(Message("moderation.cidr-too-broad", "network" to "10.0.0.0/8", "min" to 16)))
+            .contains("/16"))
+        assertTrue(plain.serialize(defaults.render(Message("config.entry-pending",
+            "key" to "startup", "value" to "ADHD", "disk" to "LAZY"))).contains("restart required"))
+        assertTrue(plain.serialize(defaults.render(Message("reload.check-valid", "overrides" to 2)))
+            .contains("No changes were applied"))
+    }
 }

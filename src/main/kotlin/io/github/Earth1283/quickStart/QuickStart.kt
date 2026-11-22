@@ -1,6 +1,7 @@
 package io.github.Earth1283.quickStart
 
 import io.github.Earth1283.quickStart.core.Configuration
+import io.github.Earth1283.quickStart.core.ConfigurationLoadResult
 import io.github.Earth1283.quickStart.core.QuickStartRuntime
 import io.github.Earth1283.quickStart.core.StartupStrategy
 import java.io.File
@@ -16,12 +17,24 @@ class QuickStart : JavaPlugin() {
         val configFile = File(dataFolder, "config.yml")
         val loaded = runCatching {
             saveDefaultConfig()
-            Configuration.load(configFile)
+            Configuration.loadWithDiagnostics(configFile)
         }
-        val config = loaded.getOrElse {
-            Configuration.parse(YamlConfiguration()).copy(startup = StartupStrategy.ALL_AT_ONCE, enabledModules = emptySet())
+        val result = loaded.getOrElse {
+            ConfigurationLoadResult(
+                Configuration.parse(YamlConfiguration()).copy(startup = StartupStrategy.ALL_AT_ONCE, enabledModules = emptySet()),
+                emptyList(),
+                emptyList(),
+            )
         }
-        val instance = QuickStartRuntime(this, configFile, config, loaded.exceptionOrNull(), enabledAt)
+        val instance = QuickStartRuntime(
+            this,
+            configFile,
+            result.configuration,
+            loaded.exceptionOrNull(),
+            enabledAt,
+            result.warnings,
+            result.missingKeys,
+        )
         runtime = instance
         instance.start()
     }

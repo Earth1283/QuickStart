@@ -67,5 +67,66 @@ class ModerationCommandsTest {
             assertEquals(command.permission, plugin.commands[command.id]?.get("permission"))
             assertTrue(command.permission in permissions)
         }
+        assertTrue("quickstart.moderation.notify" in permissions)
+        assertTrue("quickstart.moderation.exempt" in permissions)
+        assertTrue("quickstart.moderation.exempt.bypass" in permissions)
+    }
+
+    @Test
+    fun `silent flag, optional removal reasons, banlist, mutelist, and global or actor modhistory parse cleanly`() {
+        val silentBefore = ModerationCommand.BAN.parse(arrayOf("-s", "Guest", "Griefing"), now)
+        assertTrue(silentBefore.silent)
+        assertEquals("Guest", silentBefore.target)
+        assertEquals("Griefing", silentBefore.reason)
+
+        val silentAfterTarget = ModerationCommand.TEMPBAN.parse(arrayOf("Guest", "-s", "1h", "Spam"), now)
+        assertTrue(silentAfterTarget.silent)
+        assertEquals("Guest", silentAfterTarget.target)
+        assertEquals(now.plusSeconds(3600), silentAfterTarget.expiry?.resolve(now))
+        assertEquals("Spam", silentAfterTarget.reason)
+
+        val silentAfterExpiry = ModerationCommand.TEMPMUTE.parse(arrayOf("Guest", "30m", "--silent", "Flood"), now)
+        assertTrue(silentAfterExpiry.silent)
+        assertEquals("Flood", silentAfterExpiry.reason)
+        assertTrue("42m" in ModerationCommand.TEMPBAN.completeExpiry(arrayOf("-s", "Guest", "42"), now))
+
+        val unbanWithReason = ModerationCommand.UNBAN.parse(arrayOf("Guest", "Appeal", "accepted"), now)
+        assertEquals("Guest", unbanWithReason.target)
+        assertEquals("Appeal accepted", unbanWithReason.reason)
+        assertNull(ModerationCommand.UNBAN.parse(arrayOf("Guest"), now).reason)
+
+        assertFailsWith<CommandProblem> {
+            ModerationCommand.BAN.parse(arrayOf("Guest"), now, requiredReasonCommands = setOf("ban", "tempban"))
+        }
+        assertNull(ModerationCommand.TEMPBAN.parse(arrayOf("Guest", "1h"), now, requiredReasonCommands = emptySet()).reason)
+
+        assertEquals(1, ModerationCommand.BANLIST.parse(emptyArray(), now).page)
+        assertEquals(3, ModerationCommand.MUTELIST.parse(arrayOf("3"), now).page)
+        assertFailsWith<CommandProblem> { ModerationCommand.BANLIST.parse(arrayOf("0"), now) }
+
+        val recent = ModerationCommand.MODHISTORY.parse(emptyArray(), now)
+        assertEquals("", recent.target)
+        assertNull(recent.actorFilter)
+        assertEquals(1, recent.page)
+
+        val recentPage2 = ModerationCommand.MODHISTORY.parse(arrayOf("2"), now)
+        assertEquals("", recentPage2.target)
+        assertEquals(2, recentPage2.page)
+
+        val byActor = ModerationCommand.MODHISTORY.parse(arrayOf("actor:Admin", "2"), now)
+        assertEquals("Admin", byActor.actorFilter)
+        assertEquals(2, byActor.page)
+        assertFailsWith<CommandProblem> { ModerationCommand.MODHISTORY.parse(arrayOf("actor:"), now) }
+
+        assertFalse(checkNotNull(IpNetwork.parse("192.0.2.0/24")).isIpv6)
+        assertTrue(checkNotNull(IpNetwork.parse("2001:db8::/32")).isIpv6)
+    }
+
+    @Test
+    fun `custom muted command list controls chat command blocking`() {
+        assertTrue(Moderation.isChatCommand("/msg Alex hi"))
+        assertFalse(Moderation.isChatCommand("/party hi"))
+        assertTrue(Moderation.isChatCommand("/party hi", setOf("party", "g")))
+        assertTrue(Moderation.isChatCommand("/myplugin:party hi", setOf("party")))
     }
 }

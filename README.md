@@ -30,7 +30,7 @@ QuickStart colors startup messages automatically in an interactive terminal and 
 | `/safeteleport [on\|off\|default\|status]` (`/safetp`) | Toggle destination safety validation (hazards, suffocation, world bounds, and unsafe drops) for your own teleports (`quickstart.teleport.safetoggle`). |
 | `/seen <player\|uuid>` | Show whether a player is online or when they were last seen (`quickstart.seen`). Staff with `quickstart.seen.details` also see UUID, IP, location, active sanctions, and moderation links. |
 | `/qs`, `/qs help` | List available commands. |
-| `/qs modules`, `/qs doctor`, `/qs diagnostics startup`, `/qs reload` | Inspect readiness and timings or reload settings. These subcommands require `quickstart.admin`. |
+| `/qs modules`, `/qs doctor`, `/qs config [section]`, `/qs diagnostics startup`, `/qs reload [check]` | Inspect readiness, live configuration, and timings, validate config changes without applying (`reload check`), or reload settings. These subcommands require `quickstart.admin`. |
 
 Home and warp names are case-insensitive and accept up to 32 letters, digits, underscores, or hyphens. Click a destination in `/homes` or `/warps` to teleport to it. Each page shows up to five destinations. Use Previous and Next or type a page number. Save, delete, and reload buttons fill in the command for you to review before sending. Optional warp visibility uses `quickstart.warp.<name>` and `quickstart.warps.bypass`. Enable `spawn.first-join` to send new players to the configured spawn when they join.
 
@@ -40,7 +40,7 @@ Home, warp, spawn, request sending, request teleporting, and `/back` each have a
 
 `/home`, `/warp`, `/spawn`, `/back`, and accepted teleport requests show a three-second action bar countdown. Moving or taking damage cancels the countdown. Players can look around while they wait. Set `teleportation.warmup-seconds` to `0` for immediate teleports. Safe teleport validation (`teleportation.safe-teleport`, enabled by default) checks destinations on the owning region for hazards, suffocation, bounds, and unsafe drops before teleporting; individual players with `quickstart.teleport.safetoggle` can override it with `/safeteleport`. When `spawn.on-respawn` is enabled, `spawn.respect-bed-spawn` (enabled by default) keeps personal beds and respawn anchors unless a player overrides it with `/bedspawn`. Automatic join and respawn placement is immediate.
 
-`/qs reload` applies home limits, warp visibility, first-join spawn, teleportation settings, and messages. Startup strategy, module selection, and `performance.warmup` settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
+`/qs reload` applies home limits, warp visibility, first-join spawn, teleportation, moderation settings, and messages, and reports changed values plus any config or message warnings. Use `/qs reload check` to validate `config.yml` and `message.yml` without applying changes, and `/qs config [section]` to inspect active values and pending restart edits. Startup strategy, module selection, and `performance.warmup` settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
 
 ## Tab completion
 
@@ -50,25 +50,26 @@ Press Tab after a QuickStart command to see matching saved homes, visible warps,
 
 | Commands | Target |
 | --- | --- |
-| `/ban`, `/tempban <player> <duration> <reason>`, `/unban` | Player name or UUID. |
-| `/ipban` (`/banip`), `/tempipban`, `/unbanip` | IPv4, IPv6, or an online player's name. A name resolves to their current IP address. |
+| `/ban`, `/tempban <player> <duration> <reason>`, `/unban <target> [reason]` | Player name or UUID. |
+| `/ipban` (`/banip`), `/tempipban`, `/unbanip` | IPv4, IPv6, or a known player's name (resolves online IP or last recorded IP). |
 | `/iprangeban`, `/tempiprangeban`, `/unbaniprange` | An IPv4 or IPv6 CIDR network such as `192.0.2.0/24` or `2001:db8::/32`. |
-| `/mute`, `/tempmute`, `/unmute` | Player name or UUID. |
-| `/ipmute`, `/tempipmute`, `/unmuteip` | IPv4, IPv6, or an online player's name. |
+| `/mute`, `/tempmute`, `/unmute <target> [reason]` | Player name or UUID. |
+| `/ipmute`, `/tempipmute`, `/unmuteip` | IPv4, IPv6, or a known player's name. |
 | `/kick <player> [reason]` | An online player. |
 | `/banstatus <target>`, `/mutestatus <target>` | Active sanctions. An online account lookup also checks its current address. An IP ban lookup includes matching CIDR bans. |
-| `/modhistory <target> [page]` | QuickStart actions for the specified account, IP, or network, newest first. |
+| `/banlist [page]`, `/mutelist [page]` | Browse all currently active QuickStart bans or mutes. |
+| `/modhistory [target\|actor:<staff>] [page]` | Browse QuickStart moderation actions globally, for a specific target, or by staff actor, newest first. |
 | `/alts <player\|uuid\|ip> [page]` | Accounts that share recorded IP addresses with the specified player or IP, with online and sanction status. |
 
-Add an expiration immediately after the target for temporary commands. Use a duration like `1h30m` or a UTC deadline like `2027-01-08 18:30`. Seconds are optional for a deadline. Press Tab for duration presets, calendar dates, times, and relevant targets. In long date formats, choose the date, type a space, and press Tab again for the time.
+Add an expiration immediately after the target for temporary commands. Use a duration like `1h30m` or a UTC deadline like `2027-01-08 18:30`. Seconds are optional for a deadline. Press Tab for duration presets, calendar dates, times, and relevant targets (including player names for active bans and mutes). In long date formats, choose the date, type a space, and press Tab again for the time.
 
-Add a reason after the target or expiration. The reason is required for `/tempban` and optional for other sanctions. Use MiniMessage formatting such as `<red>Repeated griefing</red><newline><gray>Appeal on our forums.</gray>` for styled, multiline notices. Enter `<usedialogue>` as the entire reason to open the multiline editor from a Minecraft Java 1.21.6 or newer client. The editor applies the action after you confirm. Staff can type the reason directly in the command, including from the console. Set the notice templates in `message.yml` to customize the surrounding text.
+Add a reason after the target or expiration, and include `-s` (or `--silent`) to suppress staff broadcast alerts for that action (console audit logs are still written when `moderation.log-to-console` is enabled). By default the reason is required for `/tempban` and optional for other sanctions (including removals); customize `moderation.require-reason-for`, `moderation.muted-commands`, `moderation.min-ipv4-cidr-prefix`, `moderation.min-ipv6-cidr-prefix`, `moderation.max-reason-length`, and `moderation.reason-presets` in `config.yml`. Use MiniMessage formatting such as `<red>Repeated griefing</red><newline><gray>Appeal on our forums.</gray>` for styled, multiline notices. Enter `<usedialogue>` as the entire reason to open the multiline editor from a Minecraft Java 1.21.6 or newer client. The editor applies the action after you confirm. Staff can type the reason directly in the command, including from the console. Set the notice templates in `message.yml` to customize the surrounding text.
 
-Use `/qs mod <player>` to open the moderation menu on a compatible client. Choose an action, enter an expiration if the action is temporary, and write a multiline reason before confirming. You can also open the menu with an IP or CIDR target.
+Use `/qs mod <player>` to open the moderation menu on a compatible client. The dialog displays the target's online status, active sanctions, and linked alt count, and lets you choose an action, enter an expiration if temporary, pick a reason preset or write a multiline reason, and toggle silent mode before confirming. You can also open the menu with an IP or CIDR target.
 
-Status and History buttons open the corresponding view. Unban and Unmute buttons fill in the exact command for review before sending. QuickStart keeps bans, mutes, kicks, and successful reversals in its SQLite history. Mutes cover public chat and common messaging commands such as `/msg`, `/tell`, `/me`, and `/teammsg`.
+Status, History, Alts, and Moderate buttons open the corresponding views. Unban and Unmute buttons fill in the exact command for review before sending. QuickStart keeps bans, mutes, kicks, and successful reversals in its SQLite history. Mutes cover public chat and configurable messaging commands under `moderation.muted-commands`.
 
-Operators have `quickstart.moderation` by default. Every command has its own `quickstart.moderation.<command>` permission. For example, `.tempban` allows temporary bans and `.unban` allows lifting account bans. Grant `quickstart.moderation.inspect` to allow all three inspection commands. Use `/quickstart:ban` or `/quickstart:kick` on servers where vanilla or another plugin handles the short name. Account moderation supports online players, names in the server's profile cache, and explicit UUIDs. Disable the suite with `modules.moderation: false` and restart.
+Operators have `quickstart.moderation` (including `quickstart.moderation.notify` for staff alerts) and `quickstart.moderation.exempt.bypass` by default. Grant `quickstart.moderation.exempt` to protect staff from sanctions by non-bypassing moderators; players are always blocked from moderating themselves or their own IP. Every command has its own `quickstart.moderation.<command>` permission. For example, `.tempban` allows temporary bans and `.unban` allows lifting account bans. Grant `quickstart.moderation.inspect` to allow all inspection commands (`banstatus`, `mutestatus`, `banlist`, `mutelist`, `modhistory`, `alts`). Use `/quickstart:ban` or `/quickstart:kick` on servers where vanilla or another plugin handles the short name. Account moderation supports online players, names in the server's profile cache, and explicit UUIDs. Disable the suite with `modules.moderation: false` and restart.
 
 ## Messages
 

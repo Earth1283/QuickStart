@@ -9,7 +9,7 @@ authors: [Earth1283]
 commands:
   qs:
     description: Show QuickStart help and diagnostics.
-    usage: /<command> [help|modules|doctor|diagnostics startup|reload|mod <target>]
+    usage: /<command> [help|modules|doctor|config|diagnostics startup|reload [check]|mod <target>]
   tpa:
     description: Ask to teleport to another player.
     usage: /<command> <player>
@@ -97,20 +97,20 @@ commands:
     permission: quickstart.moderation.tempban
   unban:
     description: Lift a QuickStart account ban.
-    usage: /<command> <player|uuid>
+    usage: /<command> <player|uuid> [reason]
     permission: quickstart.moderation.unban
   ipban:
     description: Permanently ban an IP address.
     aliases: [banip]
-    usage: /<command> <ip|online player> [reason]
+    usage: /<command> <ip|player> [reason]
     permission: quickstart.moderation.ipban
   tempipban:
     description: Temporarily ban an IP address.
-    usage: /<command> <ip|online player> <duration|date time> [reason]
+    usage: /<command> <ip|player> <duration|date time> [reason]
     permission: quickstart.moderation.tempipban
   unbanip:
     description: Lift a QuickStart IP ban.
-    usage: /<command> <ip|online player>
+    usage: /<command> <ip|player> [reason]
     permission: quickstart.moderation.unbanip
   iprangeban:
     description: Permanently ban an IP network using CIDR notation.
@@ -122,7 +122,7 @@ commands:
     permission: quickstart.moderation.tempiprangeban
   unbaniprange:
     description: Lift a QuickStart IP network ban.
-    usage: /<command> <cidr>
+    usage: /<command> <cidr> [reason]
     permission: quickstart.moderation.unbaniprange
   mute:
     description: Permanently mute a player account.
@@ -134,19 +134,19 @@ commands:
     permission: quickstart.moderation.tempmute
   unmute:
     description: Lift a QuickStart account mute.
-    usage: /<command> <player|uuid>
+    usage: /<command> <player|uuid> [reason]
     permission: quickstart.moderation.unmute
   ipmute:
     description: Permanently mute an IP address.
-    usage: /<command> <ip|online player> [reason]
+    usage: /<command> <ip|player> [reason]
     permission: quickstart.moderation.ipmute
   tempipmute:
     description: Temporarily mute an IP address.
-    usage: /<command> <ip|online player> <duration|date time> [reason]
+    usage: /<command> <ip|player> <duration|date time> [reason]
     permission: quickstart.moderation.tempipmute
   unmuteip:
     description: Lift a QuickStart IP mute.
-    usage: /<command> <ip|online player>
+    usage: /<command> <ip|player> [reason]
     permission: quickstart.moderation.unmuteip
   kick:
     description: Disconnect an online player with a message.
@@ -160,9 +160,17 @@ commands:
     description: Check active QuickStart mutes for an account or address.
     usage: /<command> <player|uuid|ip>
     permission: quickstart.moderation.mutestatus
+  banlist:
+    description: List all currently active QuickStart bans.
+    usage: /<command> [page]
+    permission: quickstart.moderation.banlist
+  mutelist:
+    description: List all currently active QuickStart mutes.
+    usage: /<command> [page]
+    permission: quickstart.moderation.mutelist
   modhistory:
-    description: Browse QuickStart moderation history for an account, address, or network.
-    usage: /<command> <player|uuid|ip|cidr> [page]
+    description: Browse QuickStart moderation history globally, by target, or by staff actor.
+    usage: /<command> [player|uuid|ip|cidr|actor:<staff>] [page]
     permission: quickstart.moderation.modhistory
   alts:
     description: List accounts that share recorded IP addresses with a player or IP.
@@ -190,14 +198,26 @@ permissions:
       quickstart.moderation.unmuteip: true
       quickstart.moderation.kick: true
       quickstart.moderation.inspect: true
+      quickstart.moderation.notify: true
   quickstart.moderation.inspect:
-    description: Inspect moderation status, history, and linked accounts.
+    description: Inspect moderation status, active lists, history, and linked accounts.
     default: false
     children:
       quickstart.moderation.banstatus: true
       quickstart.moderation.mutestatus: true
+      quickstart.moderation.banlist: true
+      quickstart.moderation.mutelist: true
       quickstart.moderation.modhistory: true
       quickstart.moderation.alts: true
+  quickstart.moderation.notify:
+    description: Receive staff broadcast alerts for moderation actions.
+    default: op
+  quickstart.moderation.exempt:
+    description: Protect this player from moderation sanctions by non-bypassing staff.
+    default: false
+  quickstart.moderation.exempt.bypass:
+    description: Allow applying moderation sanctions to players with quickstart.moderation.exempt.
+    default: op
   quickstart.moderation.ban:
     default: false
   quickstart.moderation.tempban:
@@ -233,6 +253,10 @@ permissions:
   quickstart.moderation.banstatus:
     default: false
   quickstart.moderation.mutestatus:
+    default: false
+  quickstart.moderation.banlist:
+    default: false
+  quickstart.moderation.mutelist:
     default: false
   quickstart.moderation.modhistory:
     default: false

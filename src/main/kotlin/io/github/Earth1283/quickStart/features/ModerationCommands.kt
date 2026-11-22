@@ -1,6 +1,7 @@
 package io.github.Earth1283.quickStart.features
 
 import io.github.Earth1283.quickStart.core.CommandProblem
+import io.github.Earth1283.quickStart.core.ModerationSettings
 import io.github.Earth1283.quickStart.core.SanctionKind
 import io.github.Earth1283.quickStart.core.TargetKind
 import io.github.Earth1283.quickStart.core.matchingSuggestions
@@ -12,7 +13,7 @@ import java.time.LocalTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-internal enum class ModerationAction { APPLY, TEMPORARY, REMOVE, KICK, STATUS, HISTORY, ALTS }
+internal enum class ModerationAction { APPLY, TEMPORARY, REMOVE, KICK, STATUS, HISTORY, ALTS, LIST }
 
 internal enum class ModerationCommand(
     val id: String,
@@ -38,74 +39,160 @@ internal enum class ModerationCommand(
     KICK("kick", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.KICK),
     BANSTATUS("banstatus", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.STATUS),
     MUTESTATUS("mutestatus", SanctionKind.MUTE, TargetKind.ACCOUNT, ModerationAction.STATUS),
+    BANLIST("banlist", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.LIST),
+    MUTELIST("mutelist", SanctionKind.MUTE, TargetKind.ACCOUNT, ModerationAction.LIST),
     MODHISTORY("modhistory", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.HISTORY),
     ALTS("alts", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.ALTS);
 
-    val isInspection: Boolean get() = action == ModerationAction.STATUS || action == ModerationAction.HISTORY || action == ModerationAction.ALTS
+    val isInspection: Boolean
+        get() = action == ModerationAction.STATUS || action == ModerationAction.HISTORY ||
+            action == ModerationAction.ALTS || action == ModerationAction.LIST
 
     val permission: String get() = "quickstart.moderation.$id"
+
+    val displayName: String
+        get() = when (this) {
+            BAN -> "Ban"
+            TEMPBAN -> "Tempban"
+            UNBAN -> "Unban"
+            IPBAN -> "IP Ban"
+            TEMPIPBAN -> "Temp IP Ban"
+            UNBANIP -> "Unban IP"
+            IPRANGEBAN -> "IP Range Ban"
+            TEMPIPRANGEBAN -> "Temp IP Range Ban"
+            UNBANIPRANGE -> "Unban IP Range"
+            MUTE -> "Mute"
+            TEMPMUTE -> "Tempmute"
+            UNMUTE -> "Unmute"
+            IPMUTE -> "IP Mute"
+            TEMPIPMUTE -> "Temp IP Mute"
+            UNMUTEIP -> "Unmute IP"
+            KICK -> "Kick"
+            BANSTATUS -> "Ban Status"
+            MUTESTATUS -> "Mute Status"
+            BANLIST -> "Ban List"
+            MUTELIST -> "Mute List"
+            MODHISTORY -> "Moderation History"
+            ALTS -> "Linked Alts"
+        }
 
     val usage: String
         get() {
             if (this == TEMPBAN) return "/$id <player> <duration> <reason>"
+            if (action == ModerationAction.LIST) return "/$id [page]"
+            if (action == ModerationAction.HISTORY) return "/$id [player|uuid|ip|cidr|actor:<staff>] [page]"
             val subject = when {
                 this == ALTS -> "<player|uuid|ip>"
                 isInspection -> "<player|uuid|ip|cidr>"
                 else -> when (target) {
                     TargetKind.ACCOUNT -> if (this == KICK) "<player>" else "<player|uuid>"
-                    TargetKind.IP -> "<ip|online player>"
+                    TargetKind.IP -> "<ip|player>"
                     TargetKind.RANGE -> "<cidr>"
                 }
             }
             val arguments = when (action) {
-                ModerationAction.REMOVE, ModerationAction.STATUS -> ""
-                ModerationAction.HISTORY, ModerationAction.ALTS -> " [page]"
+                ModerationAction.STATUS -> ""
+                ModerationAction.ALTS -> " [page]"
                 ModerationAction.TEMPORARY -> " <duration|date time> [reason]"
                 else -> " [reason]"
             }
             return "/$id $subject$arguments"
         }
 
-    fun parse(args: Array<out String>, now: Instant = Instant.now()): ModerationArguments {
-        val subject = args.firstOrNull()?.takeIf(String::isNotBlank) ?: throw usageProblem()
-        if (action == ModerationAction.HISTORY || action == ModerationAction.ALTS) {
+    fun parse(
+        args: Array<out String>,
+        now: Instant = Instant.now(),
+        requiredReasonCommands: Set<String> = ModerationSettings.DEFAULT_REQUIRE_REASON_FOR,
+    ): ModerationArguments {
+        if (action == ModerationAction.LIST) {
+            val page = if (args.isEmpty()) 1 else args.singleOrNull()?.toIntOrNull()?.takeIf { it > 0 }
+                ?: throw usageProblem()
+            return ModerationArguments("", page = page)
+        }
+        if (action == ModerationAction.HISTORY) {
+            if (args.isEmpty()) return ModerationArguments("", page = 1)
+            if (args.size == 1) {
+                args[0].toIntOrNull()?.takeIf { it > 0 }?.let { page ->
+                    return ModerationArguments("", page = page)
+                }
+            }
+            val first = args[0].takeIf(String::isNotBlank) ?: throw usageProblem()
+            val page = if (args.size == 1) 1 else args.getOrNull(1)?.toIntOrNull()?.takeIf { args.size == 2 && it > 0 }
+                ?: throw usageProblem()
+            if (first.startsWith("actor:", ignoreCase = true)) {
+                val staff = first.substringAfter(':').trim().takeIf(String::isNotEmpty) ?: throw usageProblem()
+                return ModerationArguments("", page = page, actorFilter = staff)
+            }
+            return ModerationArguments(first, page = page)
+        }
+        if (action == ModerationAction.ALTS) {
+            val subject = args.firstOrNull()?.takeIf(String::isNotBlank) ?: throw usageProblem()
             val page = if (args.size == 1) 1 else args.getOrNull(1)?.toIntOrNull()?.takeIf { args.size == 2 && it > 0 }
                 ?: throw usageProblem()
             return ModerationArguments(subject, page = page)
         }
-        if (action == ModerationAction.REMOVE || action == ModerationAction.STATUS) {
+        if (action == ModerationAction.STATUS) {
+            val subject = args.firstOrNull()?.takeIf(String::isNotBlank) ?: throw usageProblem()
             if (args.size != 1) throw usageProblem()
             return ModerationArguments(subject)
         }
+
+        // Parse optional -s / --silent flag for state-changing commands.
+        var silent = false
+        val tokens = args.toMutableList()
+        if (tokens.firstOrNull()?.let(::isSilentFlag) == true) {
+            silent = true
+            tokens.removeAt(0)
+        }
+        val subject = tokens.firstOrNull()?.takeIf(String::isNotBlank) ?: throw usageProblem()
+        var index = 1
+        if (!silent && tokens.getOrNull(index)?.let(::isSilentFlag) == true) {
+            silent = true
+            index++
+        }
         val expiry = if (action == ModerationAction.TEMPORARY) {
-            val first = args.getOrNull(1) ?: throw usageProblem()
+            val first = tokens.getOrNull(index) ?: throw usageProblem()
             val parts = if (ModerationExpiry.isDate(first)) {
-                listOf(first, args.getOrNull(2) ?: throw CommandProblem("moderation.invalid-expiry"))
+                listOf(first, tokens.getOrNull(index + 1) ?: throw CommandProblem("moderation.invalid-expiry"))
             } else listOf(first)
-            ModerationExpiry.parse(parts.joinToString("T"), now) to parts.size
+            index += parts.size
+            ModerationExpiry.parse(parts.joinToString("T"), now)
         } else null
-        val reason = args.drop(1 + (expiry?.second ?: 0)).joinToString(" ").trim().takeIf(String::isNotEmpty)
-        requireReason(reason)
-        return ModerationArguments(subject, expiry?.first, reason)
+        if (!silent && tokens.getOrNull(index)?.let(::isSilentFlag) == true) {
+            silent = true
+            index++
+        }
+        val reason = tokens.drop(index).joinToString(" ").trim().takeIf(String::isNotEmpty)
+        requireReason(reason, requiredReasonCommands)
+        return ModerationArguments(subject, expiry, reason, silent = silent)
     }
 
-    fun requireReason(reason: String?) {
-        if (this == TEMPBAN && reason.isNullOrBlank()) throw usageProblem()
+    fun requireReason(
+        reason: String?,
+        requiredReasonCommands: Set<String> = ModerationSettings.DEFAULT_REQUIRE_REASON_FOR,
+    ) {
+        if (id in requiredReasonCommands && reason.isNullOrBlank()) throw usageProblem()
     }
 
     private fun usageProblem() = CommandProblem("moderation.usage", "usage" to usage)
 
     fun completeExpiry(args: Array<out String>, now: Instant = Instant.now()): List<String> {
         if (action != ModerationAction.TEMPORARY) return emptyList()
-        return when (args.size) {
-            2 -> ModerationExpiry.suggestions(args[1], now)
-            3 -> ModerationExpiry.times(args[1], args[2], now)
+        val shifted = if (args.firstOrNull()?.let(::isSilentFlag) == true) args.drop(1) else args.toList()
+        val afterTarget = if (shifted.getOrNull(1)?.let(::isSilentFlag) == true) {
+            listOf(shifted[0]) + shifted.drop(2)
+        } else shifted
+        return when (afterTarget.size) {
+            2 -> ModerationExpiry.suggestions(afterTarget[1], now)
+            3 -> ModerationExpiry.times(afterTarget[1], afterTarget[2], now)
             else -> emptyList()
         }
     }
 
     companion object {
         val byId = entries.associateBy(ModerationCommand::id)
+
+        fun isSilentFlag(token: String): Boolean = token.equals("-s", ignoreCase = true) || token.equals("--silent", ignoreCase = true)
     }
 }
 
@@ -114,6 +201,8 @@ internal data class ModerationArguments(
     val expiry: ModerationExpiry? = null,
     val reason: String? = null,
     val page: Int = 1,
+    val silent: Boolean = false,
+    val actorFilter: String? = null,
 )
 
 internal sealed interface ModerationExpiry {

@@ -71,6 +71,43 @@ teleportation:
   # Players with quickstart.teleport.safetoggle can override this for themselves.
   safe-teleport: true
 
+# Moderation settings (/ban, /mute, /kick, /qs mod).
+moderation:
+  # Broadcast moderation actions to online staff with quickstart.moderation.notify.
+  broadcast-to-staff: true
+  # Write moderation actions to the server console log.
+  log-to-console: true
+  # Maximum length for moderation reasons (32-2048 characters).
+  max-reason-length: 1024
+  # Commands that require a reason (e.g. tempban, ban, kick).
+  require-reason-for:
+    - tempban
+  # Minimum allowed CIDR prefix length for /iprangeban and /tempiprangeban.
+  min-ipv4-cidr-prefix: 16
+  min-ipv6-cidr-prefix: 32
+  # Commands blocked while a player is muted (without leading slash).
+  muted-commands:
+    - me
+    - msg
+    - tell
+    - w
+    - teammsg
+    - tm
+    - message
+    - m
+    - whisper
+    - pm
+    - reply
+    - r
+    - say
+    - tellraw
+  # Quick-pick reason presets shown in the /qs mod dialog (optional).
+  reason-presets:
+    - Spam or advertising
+    - Harassment or disrespect
+    - Griefing or stealing
+    - Cheating or unfair advantage
+
 # Background warmup settings for ADHD startup mode.
 performance:
   warmup:
