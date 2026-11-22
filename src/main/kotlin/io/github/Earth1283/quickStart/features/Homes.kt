@@ -41,7 +41,7 @@ internal class Homes(private val storage: SqliteStorage, private val teleports: 
             }
             FeatureCommand.HOMES -> {
                 val names = storage.names(homes)
-                replyWithNames(actor, names, "homes")
+                replyWithNames(call, names, FeatureCommand.SETHOME, FeatureCommand.DELHOME)
             }
             else -> error("Unsupported homes command ${call.command.id}")
         }

@@ -24,7 +24,7 @@ internal class Warps(private val storage: SqliteStorage, private val teleports: 
             }
             FeatureCommand.WARP -> {
                 val name = call.name()
-                val visible = !call.settings.perWarpPermissions || actor.onOwner { canUse(it, name) }
+                val visible = !call.settings.perWarpPermissions || actor.onOwner { canSeeWarp(it, name) }
                 val position = if (visible) storage.get(warps, name) else null
                 if (position == null) return actor.reply("warps.not-found", "name" to name)
                 val cooldown = TeleportCooldown(TeleportAction.WARP, call.settings.warpCooldownSeconds)
@@ -39,14 +39,14 @@ internal class Warps(private val storage: SqliteStorage, private val teleports: 
             FeatureCommand.WARPS -> {
                 val names = storage.names(warps)
                 val visible = if (call.settings.perWarpPermissions) {
-                    actor.onOwner { sender -> names.filter { canUse(sender, it) } }
+                    actor.onOwner { sender -> names.filter { canSeeWarp(sender, it) } }
                 } else names
-                replyWithNames(actor, visible, "warps")
+                replyWithNames(call, visible, FeatureCommand.SETWARP, FeatureCommand.DELWARP)
             }
             else -> error("Unsupported warps command ${call.command.id}")
         }
     }
-
-    private fun canUse(sender: CommandSender, name: String): Boolean =
-        sender.hasPermission("quickstart.warps.bypass") || sender.hasPermission("quickstart.warp.$name")
 }
+
+internal fun canSeeWarp(sender: CommandSender, name: String): Boolean =
+    sender.hasPermission("quickstart.warps.bypass") || sender.hasPermission("quickstart.warp.$name")

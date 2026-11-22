@@ -85,6 +85,13 @@ internal class Modules(
 
     fun statuses(): List<ModuleStatus> = ordered.map(Entry::status)
 
+    fun readyInstance(id: String): RuntimeModule? {
+        val entry = byId.getValue(id)
+        return synchronized(entry) {
+            entry.instance.takeIf { !closing.get() && entry.state == ModuleState.READY }
+        }
+    }
+
     suspend fun initialize(id: String): RuntimeModule {
         val entry = byId.getValue(id)
         val scope = entry.scope ?: throw ModuleUnavailable("$id is disabled")

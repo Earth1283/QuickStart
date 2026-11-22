@@ -1,9 +1,12 @@
 package io.github.Earth1283.quickStart.core
 
 import java.io.File
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.ComponentIteratorType
 import net.kyori.adventure.text.event.ClickEvent
 import net.kyori.adventure.text.event.HoverEvent
@@ -34,24 +37,75 @@ class MessagesTest {
     }
 
     @Test
-    fun `teleport request messages include clickable responses and describe the destination`() {
+    fun `request buttons target the exact invitation and describe its destination`() {
+        val id = UUID.randomUUID()
         val tooltips = mapOf(
-            "requests.incoming" to "Let .Alex_1 teleport to you.",
-            "requests.incoming-here" to "Teleport to .Alex_1.",
-            "requests.incoming-here-fixed" to "Teleport to where .Alex_1 sent the invitation.",
+            "incoming" to "Let .Alex_1 teleport to you.",
+            "incoming-here" to "Teleport to .Alex_1's current location.",
+            "incoming-here-fixed" to "Teleport to where .Alex_1 sent the invitation.",
         )
-        for ((key, tooltip) in tooltips) {
-            val rendered = defaults.render(Message(key, "player" to ".Alex_1", "seconds" to 45))
+        for ((variant, tooltip) in tooltips) {
+            val catalogMessage = Message(
+                "requests.$variant",
+                "player" to ".Alex_1",
+                "seconds" to 45,
+                "accept" to ChatAction(
+                    "tpaccept @$id", Message("requests.accept"), Message("requests.$variant-hover", "player" to ".Alex_1"),
+                ),
+                "deny" to ChatAction(
+                    "tpdeny @$id", Message("requests.deny"), Message("requests.deny-hover", "player" to ".Alex_1"),
+                ),
+                requestId = id,
+            )
+            val rendered = defaults.render(catalogMessage)
             val links = rendered.iterable(ComponentIteratorType.DEPTH_FIRST).filter { it.clickEvent() != null }
-
+            assertTrue(plain.serialize(rendered).contains("Expires in 45s."))
             assertEquals(listOf("[Accept]", "[Deny]"), links.map(plain::serialize))
             assertEquals(
-                listOf(ClickEvent.runCommand("/quickstart:tpaccept .Alex_1"), ClickEvent.runCommand("/quickstart:tpdeny .Alex_1")),
+                listOf(ClickEvent.runCommand("/quickstart:tpaccept @$id"), ClickEvent.runCommand("/quickstart:tpdeny @$id")),
                 links.map { it.clickEvent() },
             )
             assertEquals(listOf(HoverEvent.Action.SHOW_TEXT, HoverEvent.Action.SHOW_TEXT), links.map { it.hoverEvent()?.action() })
-            assertEquals("$tooltip Request lasts 45s.", plain.serialize(links.first().hoverEvent()?.value() as net.kyori.adventure.text.Component))
+            assertEquals(tooltip, plain.serialize(links.first().hoverEvent()?.value() as Component))
         }
+    }
+
+    @Test
+    fun `legacy request templates keep their name and wording but target the exact invitation`() {
+        val file = directory.resolve("message.yml")
+        file.writeText("""
+            requests:
+              incoming: "<player> <quickstart:tpaccept:player>Join</quickstart>"
+        """.trimIndent())
+        val id = UUID.randomUUID()
+        val rendered = defaults.withOverrides(file).render(Message("requests.incoming", "player" to "Alex", requestId = id))
+        assertEquals("Alex Join", plain.serialize(rendered))
+        val link = rendered.iterable(ComponentIteratorType.DEPTH_FIRST).single { it.clickEvent() != null }
+        assertEquals(ClickEvent.runCommand("/quickstart:tpaccept @$id"), link.clickEvent())
+    }
+
+    @Test
+    fun `management actions prefill commands and console sees literal syntax`() {
+        val message = Message("ui.control", "action" to ChatAction(
+            "delhome base", Message("ui.delete"), Message("homes.delete-hover", "name" to "base"), suggest = true,
+        ))
+        val player = defaults.render(message)
+        val link = player.iterable(ComponentIteratorType.DEPTH_FIRST).single { it.clickEvent() != null }
+        assertEquals(ClickEvent.suggestCommand("/quickstart:delhome base"), link.clickEvent())
+        val console = defaults.render(message, interactive = false)
+        assertEquals("/delhome base", plain.serialize(console))
+        assertTrue(console.iterable(ComponentIteratorType.DEPTH_FIRST).none { it.clickEvent() != null })
+    }
+
+    @Test
+    fun `menu page only links to neighboring available pages`() {
+        val page = (1..11).toList().chatPage(2).navigation(FeatureCommand.HOMES)
+        val rendered = defaults.render(page)
+        assertTrue(plain.serialize(rendered).startsWith("Page 2 of 3"))
+        assertEquals(
+            listOf(ClickEvent.runCommand("/quickstart:homes 1"), ClickEvent.runCommand("/quickstart:homes 3")),
+            rendered.iterable(ComponentIteratorType.DEPTH_FIRST).mapNotNull { it.clickEvent() },
+        )
     }
 
     @Test

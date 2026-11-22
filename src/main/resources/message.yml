@@ -7,12 +7,22 @@
 # Use <hover:show_text:'Tooltip'>Text</hover> to add hover text to either link.
 # Omitted entries use the bundled defaults. Run /qs reload to apply edits.
 
+ui:
+  control: "<action>"
+  action-row: "<actions>"
+  destination-row: "<destination>  <delete>"
+  delete: "<yellow>[Delete]</yellow>"
+  page: "<gray>Page <page> of <pages></gray>  <controls>"
+  previous: "<aqua>[Previous]</aqua>"
+  next: "<aqua>[Next]</aqua>"
+  go-to-page: "Go to page <page>."
+
 common:
   player-only: "<red>This command is only available to players.</red>"
   no-permission: "<red>You do not have permission.</red>"
   invalid-name: "<red>Use 1–<limit> letters, numbers, underscores or hyphens for the name.</red>"
-  session-starting: "<yellow>Your QuickStart session is still starting.</yellow>"
-  command-queue-full: "<yellow>Too many QuickStart commands are pending.</yellow>"
+  session-starting: "<yellow>Your QuickStart session is still starting. Try again shortly.</yellow>"
+  command-queue-full: "<yellow>QuickStart is still processing your commands. Try again shortly.</yellow>"
   starting: "<yellow>QuickStart is still starting. Try again shortly.</yellow>"
   unavailable: "<red>QuickStart is unavailable. Ask an administrator to run /qs doctor.</red>"
   connection-inactive: "<red>The player connection is no longer active</red>"
@@ -26,6 +36,7 @@ usage:
   optional-name: "<yellow>Usage: /<command> [name]</yellow>"
   required-name: '<yellow>Usage: /<command> \<name></yellow>'
   required-player: '<yellow>Usage: /<command> \<player></yellow>'
+  optional-page: "<yellow>Usage: /<command> [page]</yellow> <gray>Use a positive page number.</gray>"
   optional-player: "<yellow>Usage: /<command> [player]</yellow>"
 
 login:
@@ -37,10 +48,14 @@ homes:
   updated: "<green>Home '<name>' updated.</green>"
   deleted: "<green>Home '<name>' deleted.</green>"
   teleported: "<green>Teleported to home '<name>'.</green>"
-  not-found: "<red>Home '<name>' was not found.</red>"
-  limit: "<yellow>You have reached your limit of <limit> homes.</yellow>"
+  not-found: "<red>Home '<name>' was not found.</red> <gray>Use /homes to see saved homes.</gray>"
+  limit: "<yellow>You have reached your limit of <limit> homes.</yellow> <gray>Use /homes to review your saved homes.</gray>"
   list: "<aqua>Homes: <names></aqua>"
-  item: "<hover:show_text:'Teleport to home <name>'><quickstart:home:name><name></quickstart></hover>"
+  item: "<hover:show_text:'Teleport to home <name>'><quickstart:home:name><underlined><name></underlined></quickstart></hover>"
+  console-item: "<name> (/home <name>)"
+  add: "<aqua>[Save a home]</aqua>"
+  add-hover: "Fill in the command to save your current location as a home."
+  delete-hover: "Fill in the command to delete home <name>."
   empty: "<yellow>You have no saved homes.</yellow>"
 
 warps:
@@ -48,9 +63,13 @@ warps:
   updated: "<green>Warp '<name>' updated.</green>"
   deleted: "<green>Warp '<name>' deleted.</green>"
   teleported: "<green>Teleported to warp '<name>'.</green>"
-  not-found: "<red>Warp '<name>' was not found.</red>"
+  not-found: "<red>Warp '<name>' was not found.</red> <gray>Use /warps to see available warps.</gray>"
   list: "<aqua>Warps: <names></aqua>"
-  item: "<hover:show_text:'Teleport to warp <name>'><quickstart:warp:name><name></quickstart></hover>"
+  item: "<hover:show_text:'Teleport to warp <name>'><quickstart:warp:name><underlined><name></underlined></quickstart></hover>"
+  console-item: "<name> (/warp <name>)"
+  add: "<aqua>[Save a warp]</aqua>"
+  add-hover: "Fill in the command to save your current location as a warp."
+  delete-hover: "Fill in the command to delete warp <name>."
   empty: "<yellow>No warps are available.</yellow>"
 
 spawn:
@@ -63,23 +82,30 @@ back:
   unavailable: "<yellow>No previous location is available.</yellow>"
 
 requests:
+  heading: "<gold><bold>Teleport requests</bold></gold>"
+  empty: "<gray>You have no pending teleport requests.</gray>"
   incoming: >-
-    <aqua><player> wants to teleport to you.</aqua>
-    <green><hover:show_text:'Let <player> teleport to you. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
-    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+    <white><player> asked to teleport to you.</white>
+    <newline><gray>Expires in <seconds>s.</gray> <accept> <deny> <inbox>
   incoming-here: >-
-    <aqua><player> asked you to teleport to them.</aqua>
-    <green><hover:show_text:'Teleport to <player>. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
-    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+    <white><player> asked you to teleport to them.</white>
+    <newline><gray>Expires in <seconds>s.</gray> <accept> <deny> <inbox>
   incoming-here-fixed: >-
-    <aqua><player> invited you to their original location.</aqua>
-    <green><hover:show_text:'Teleport to where <player> sent the invitation. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
-    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+    <white><player> invited you to the location where they sent the request.</white>
+    <newline><gray>Expires in <seconds>s.</gray> <accept> <deny> <inbox>
+  accept: "<green>[Accept]</green>"
+  deny: "<red>[Deny]</red>"
+  inbox: "<aqua>[Requests]</aqua>"
+  incoming-hover: "Let <player> teleport to you."
+  incoming-here-hover: "Teleport to <player>'s current location."
+  incoming-here-fixed-hover: "Teleport to where <player> sent the invitation."
+  deny-hover: "Decline the request from <player>."
+  stale: "<yellow>That teleport request is no longer active.</yellow> <inbox>"
   sent: "<green>Teleport request sent to <player>.</green>"
   cooldown: "<yellow>Please wait before sending another teleport request.</yellow>"
   player-unavailable: "<red>That player is unavailable.</red>"
   self: "<red>You cannot request a teleport with yourself.</red>"
-  no-match: "<yellow>You have no matching teleport request.</yellow>"
+  no-match: "<yellow>You have no matching teleport request.</yellow> <inbox>"
   denied: "<yellow>Teleport request from <player> denied.</yellow>"
   denied-notice: "<yellow><player> denied your teleport request.</yellow>"
   completed: "<green>Teleport request from <player> completed.</green>"
@@ -87,20 +113,70 @@ requests:
 
 teleport:
   cancelled: "<red>The teleport was cancelled.</red>"
-  cooldown: "<yellow>Please wait for your teleport cooldown to expire.</yellow>"
-  in-progress: "<yellow>A teleport is already in progress.</yellow>"
+  cooldown: "<yellow>Teleport is on cooldown. Try again shortly.</yellow>"
+  in-progress: "<yellow>A teleport is already in progress. Wait for it to finish.</yellow>"
   world-unavailable: "<red>The destination world is unavailable.</red>"
   disconnected: "<red>A player involved in the teleport disconnected.</red>"
 
 help:
-  heading: "<gold>QuickStart commands</gold>"
-  commands: "<aqua><commands></aqua>"
-  admin-commands: "<aqua>/qs modules  /qs doctor  /qs diagnostics startup  /qs reload</aqua>"
+  heading: "<gold><bold>QuickStart commands</bold></gold>"
+  commands: "<commands>"
+  group: "<white><bold><section></bold></white>  <actions>"
+  admin-commands: "<white><bold>Administration</bold></white>  <commands>"
+  sections:
+    homes: "Homes"
+    warps: "Warps"
+    spawn: "Spawn"
+    teleportation: "Teleportation"
+  labels:
+    tpa: "<aqua>[Ask to visit]</aqua>"
+    tpahere: "<aqua>[Invite here]</aqua>"
+    tpaccept: "<aqua>[Accept]</aqua>"
+    tpdeny: "<aqua>[Deny]</aqua>"
+    tprequests: "<aqua>[Requests]</aqua>"
+    back: "<aqua>[Go back]</aqua>"
+    sethome: "<aqua>[Save home]</aqua>"
+    home: "<aqua>[Go home]</aqua>"
+    delhome: "<aqua>[Delete home]</aqua>"
+    homes: "<aqua>[Browse homes]</aqua>"
+    setwarp: "<aqua>[Save warp]</aqua>"
+    warp: "<aqua>[Go to warp]</aqua>"
+    delwarp: "<aqua>[Delete warp]</aqua>"
+    warps: "<aqua>[Browse warps]</aqua>"
+    setspawn: "<aqua>[Set spawn]</aqua>"
+    spawn: "<aqua>[Go to spawn]</aqua>"
+    modules: "<aqua>[Modules]</aqua>"
+    doctor: "<aqua>[Doctor]</aqua>"
+    startup: "<aqua>[Startup timings]</aqua>"
+    reload: "<aqua>[Reload]</aqua>"
+  details:
+    tpa: "/tpa <gray>• Ask to teleport to another player.</gray>"
+    tpahere: "/tpahere <gray>• Ask another player to teleport to you.</gray>"
+    tpaccept: "/tpaccept <gray>• Accept a request from a player, or omit the name to accept the newest.</gray>"
+    tpdeny: "/tpdeny <gray>• Deny a request from a player, or omit the name to deny the newest.</gray>"
+    tprequests: "Browse your pending teleport requests."
+    back: "Return to your previous location."
+    sethome: "/sethome <gray>• Save your current location as a home.</gray>"
+    home: "Teleport to your default home. Use Browse homes to choose a named home."
+    delhome: "/delhome <gray>• Remove a saved home.</gray>"
+    homes: "Browse your saved homes."
+    setwarp: "/setwarp <gray>• Save your current location as a shared destination.</gray>"
+    warp: "/warp <gray>• Teleport to a named warp.</gray>"
+    delwarp: "/delwarp <gray>• Remove a saved warp.</gray>"
+    warps: "Browse available warps."
+    setspawn: "/setspawn <gray>• Make your current location the server spawn.</gray>"
+    spawn: "Teleport to the server spawn."
+    modules: "Show module states and dependencies."
+    doctor: "Check readiness, configuration, and storage."
+    startup: "Show startup and module timings."
+    reload: "Fill in the command to reload QuickStart settings and messages."
 
 modules:
+  heading: "<gold><bold>QuickStart modules</bold></gold>"
   line: "<module>: <state> (required: <required>, optional: <optional>)"
 
 diagnostics:
+  heading: "<gold><bold>QuickStart startup timings</bold></gold>"
   bootstrap: "Bootstrap: <time>"
   critical: "Critical initialization: <time>"
   ready: "Application ready after: <time>"
@@ -114,7 +190,7 @@ diagnostics:
   no-operations: "no operations recorded"
 
 doctor:
-  readiness: "QuickStart <state> (<strategy>)"
+  readiness: "<gold><bold>QuickStart</bold></gold> <white><state></white> <gray>(<strategy>)</gray>"
   config-valid: "Configuration valid."
   config-error: "<red>Configuration error: <detail></red>"
   message-error: "<red>message.yml error: <detail></red>"
@@ -128,7 +204,7 @@ doctor:
   commands: "Feature commands: <timings>."
 
 reload:
-  success: "<green>Reloaded home, warp, spawn and teleportation settings.</green>"
+  success: "<green>Reloaded home, warp, spawn and teleportation settings.</green> <gray>Chat messages are up to date.</gray>"
   restart-required: "<yellow>Restart required to apply <settings>.</yellow>"
   invalid-config: "<red>Settings were kept. <detail></red>"
   invalid-messages: "<red>Settings were kept. Could not load message.yml: <detail></red>"

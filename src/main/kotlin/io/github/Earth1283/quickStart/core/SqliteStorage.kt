@@ -10,6 +10,7 @@ import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -34,6 +35,8 @@ internal class SqliteStorage(
     private var connection: Connection? = null
     // Only the SQLite worker uses the statements, and the connection closes them at shutdown.
     private val statements = mutableMapOf<String, PreparedStatement>()
+    // The SQLite worker publishes immutable name lists after its writes commit.
+    private val savedNames = ConcurrentHashMap<DestinationGroup, List<String>>()
     val closed = CompletableFuture<Unit>()
     private val runtime = Runtime.getRuntime()
     private val shutdownHook = Thread({
@@ -59,7 +62,10 @@ internal class SqliteStorage(
         }
         migrate(database)
         verify(database)
+        loadSavedNames(database)
     }
+
+    fun cachedNames(group: DestinationGroup): List<String> = savedNames[group].orEmpty()
 
     suspend fun health() = query("health check", action = ::verify)
 
@@ -88,7 +94,7 @@ internal class SqliteStorage(
     suspend fun save(group: DestinationGroup, name: String, position: Position, limit: Int? = null): SaveResult =
         query("save ${group.kind.key}", write = true) { database ->
             require(DestinationNames.normalize(name) == name) { "Invalid destination name" }
-            database.transaction {
+            val result = database.transaction {
                 val exists = withStatement("SELECT 1 FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
                     statement.bind(group, name)
                     statement.executeQuery().use(ResultSet::next)
@@ -106,13 +112,42 @@ internal class SqliteStorage(
                 }
                 if (exists) SaveResult.UPDATED else SaveResult.CREATED
             }
+            if (result == SaveResult.CREATED && group.kind != DestinationKind.SPAWN) {
+                savedNames[group] = (cachedNames(group) + name).sorted()
+            }
+            result
         }
 
     suspend fun delete(group: DestinationGroup, name: String): Boolean = query("delete ${group.kind.key}", write = true) { database ->
-        database.withStatement("DELETE FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
+        val removed = database.withStatement("DELETE FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
             statement.bind(group, name)
             statement.executeUpdate() > 0
         }
+        if (removed && group.kind != DestinationKind.SPAWN) {
+            val names = cachedNames(group) - name
+            if (names.isEmpty()) savedNames.remove(group) else savedNames[group] = names
+        }
+        removed
+    }
+
+    private fun loadSavedNames(database: Connection) {
+        val names = mutableMapOf<DestinationGroup, MutableList<String>>()
+        database.createStatement().use { statement ->
+            statement.executeQuery(
+                "SELECT kind, owner, name FROM destinations WHERE kind IN ('home', 'warp') ORDER BY kind, owner, name",
+            ).use { rows ->
+                while (rows.next()) {
+                    val name = rows.getString("name")
+                    if (DestinationNames.normalize(name) != name) continue
+                    val group = when (rows.getString("kind")) {
+                        "home" -> DestinationGroup(DestinationKind.HOME, rows.getString("owner"))
+                        else -> DestinationGroup.warps
+                    }
+                    names.getOrPut(group, ::mutableListOf).add(name)
+                }
+            }
+        }
+        savedNames.putAll(names.mapValues { (_, groupNames) -> groupNames.toList() })
     }
 
     override fun close() {
@@ -128,6 +163,7 @@ internal class SqliteStorage(
                     reportFailure(failure)
                 } finally {
                     statements.clear()
+                    savedNames.clear()
                     connection = null
                     if (hookRegistered) {
                         try {

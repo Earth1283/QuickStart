@@ -5,33 +5,54 @@ import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.ServerScheduler
 import io.github.Earth1283.quickStart.platform.TeleportResult
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.JoinConfiguration
 import org.bukkit.command.CommandSender
 
 internal class CommandProblem(key: String, vararg placeholders: Pair<String, Any>) : IllegalArgumentException(key) {
     val notice = Message(key, *placeholders)
 }
 
-internal enum class CommandArgument { NONE, OPTIONAL_HOME, REQUIRED_WARP, REQUIRED_PLAYER, OPTIONAL_PLAYER }
+internal enum class CommandArgument { NONE, OPTIONAL_HOME, REQUIRED_WARP, REQUIRED_PLAYER, OPTIONAL_PLAYER, OPTIONAL_PAGE }
 
 internal enum class FeatureCommand(val id: String, val module: String, val argument: CommandArgument = CommandArgument.NONE) {
     TPA("tpa", "teleportation", CommandArgument.REQUIRED_PLAYER),
     TPAHERE("tpahere", "teleportation", CommandArgument.REQUIRED_PLAYER),
     TPACCEPT("tpaccept", "teleportation", CommandArgument.OPTIONAL_PLAYER),
     TPDENY("tpdeny", "teleportation", CommandArgument.OPTIONAL_PLAYER),
+    TPREQUESTS("tprequests", "teleportation", CommandArgument.OPTIONAL_PAGE),
     BACK("back", "teleportation"),
     SETHOME("sethome", "homes", CommandArgument.OPTIONAL_HOME),
     HOME("home", "homes", CommandArgument.OPTIONAL_HOME),
     DELHOME("delhome", "homes", CommandArgument.OPTIONAL_HOME),
-    HOMES("homes", "homes"),
+    HOMES("homes", "homes", CommandArgument.OPTIONAL_PAGE),
     SETWARP("setwarp", "warps", CommandArgument.REQUIRED_WARP),
     WARP("warp", "warps", CommandArgument.REQUIRED_WARP),
     DELWARP("delwarp", "warps", CommandArgument.REQUIRED_WARP),
-    WARPS("warps", "warps"),
+    WARPS("warps", "warps", CommandArgument.OPTIONAL_PAGE),
     SETSPAWN("setspawn", "spawn"),
     SPAWN("spawn", "spawn");
 
     val playerOnly: Boolean get() = this != WARPS && this != DELWARP
+
+    val permission: String
+        get() = when (this) {
+            BACK -> "quickstart.back"
+            SETWARP, DELWARP -> "quickstart.warps.manage"
+            SETSPAWN -> "quickstart.spawn.manage"
+            SPAWN -> "quickstart.spawn"
+            HOME, SETHOME, DELHOME, HOMES -> "quickstart.homes"
+            WARP, WARPS -> "quickstart.warps"
+            TPA, TPAHERE, TPACCEPT, TPDENY, TPREQUESTS -> "quickstart.tpa"
+        }
+
+    val usage: String
+        get() = "/$id" + when (argument) {
+            CommandArgument.NONE -> ""
+            CommandArgument.OPTIONAL_HOME -> " [name]"
+            CommandArgument.REQUIRED_WARP -> " <name>"
+            CommandArgument.REQUIRED_PLAYER -> " <player>"
+            CommandArgument.OPTIONAL_PLAYER -> " [player]"
+            CommandArgument.OPTIONAL_PAGE -> " [page]"
+        }
 
     fun parse(args: Array<out String>, nameMaxLength: Int = 32): String? {
         val value = args.singleOrNull()
@@ -46,6 +67,11 @@ internal enum class FeatureCommand(val id: String, val module: String, val argum
             }
             CommandArgument.REQUIRED_WARP -> destinationName(value ?: throw CommandProblem("usage.required-name", "command" to id), nameMaxLength)
             CommandArgument.REQUIRED_PLAYER -> value ?: throw CommandProblem("usage.required-player", "command" to id)
+            CommandArgument.OPTIONAL_PAGE -> {
+                if (args.isEmpty()) return null
+                value?.toIntOrNull()?.takeIf { it > 0 }?.toString()
+                    ?: throw CommandProblem("usage.optional-page", "command" to id)
+            }
             CommandArgument.OPTIONAL_PLAYER -> {
                 if (args.size > 1) throw CommandProblem("usage.optional-player", "command" to id)
                 value
@@ -78,7 +104,7 @@ internal class CommandActor(
     suspend fun reply(notices: List<Message>) {
         val catalog = messages()
         try {
-            onOwner { notices.forEach { sender.sendMessage(catalog.render(it)) } }
+            onOwner { notices.forEach { sender.sendMessage(catalog.render(it, interactive = session != null)) } }
         } catch (_: EntityUnavailable) {
         }
     }
@@ -100,20 +126,12 @@ internal data class FeatureCall(
 ) {
     fun name(): String = checkNotNull(argument)
 
+    fun page(): Int = argument?.toInt() ?: 1
+
     suspend fun teleportResult(result: TeleportResult, success: String, vararg placeholders: Pair<String, Any>) =
         actor.reply(result.failureMessage ?: Message(success, *placeholders))
 }
 
 internal interface CommandModule : RuntimeModule {
     suspend fun execute(call: FeatureCall)
-}
-
-internal suspend fun replyWithNames(actor: CommandActor, names: List<String>, section: String) {
-    if (names.isEmpty()) return actor.reply("$section.empty")
-    val separator = JoinConfiguration.commas(true)
-    val notices = names.chunked(10).map { chunk ->
-        val destinations = chunk.map { actor.render(Message("$section.item", "name" to it)) }
-        Message("$section.list", "names" to Component.join(separator, destinations))
-    }
-    actor.reply(notices)
 }

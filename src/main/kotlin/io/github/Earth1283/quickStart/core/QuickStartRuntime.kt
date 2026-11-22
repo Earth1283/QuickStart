@@ -7,6 +7,7 @@ import io.github.Earth1283.quickStart.features.Homes
 import io.github.Earth1283.quickStart.features.Spawn
 import io.github.Earth1283.quickStart.features.Teleportation
 import io.github.Earth1283.quickStart.features.Warps
+import io.github.Earth1283.quickStart.features.canSeeWarp
 import io.github.Earth1283.quickStart.platform.BackHistory
 import io.github.Earth1283.quickStart.platform.EntityUnavailable
 import io.github.Earth1283.quickStart.platform.PlayerSession
@@ -314,11 +315,49 @@ internal class QuickStartRuntime(
     override fun onTabComplete(sender: CommandSender, command: Command, alias: String, args: Array<out String>): List<String> {
         if (command.name == "qs") return administration.complete(sender, args)
         val feature = FeatureCommand.byId[command.name] ?: return emptyList()
-        if (feature.module !in config.enabledModules || args.size != 1) return emptyList()
-        return when (feature.argument) {
-            CommandArgument.REQUIRED_PLAYER, CommandArgument.OPTIONAL_PLAYER ->
-                players.names(args[0]).filterNot { it.equals(sender.name, ignoreCase = true) }
-            else -> emptyList()
+        if (args.size != 1 || feature.module !in config.enabledModules || !sender.hasPermission(feature.permission)) {
+            return emptyList()
+        }
+        if (readiness != Readiness.READY && readiness != Readiness.DEGRADED) return emptyList()
+        val viewer = sender as? Player
+        val session = viewer?.let(players::session)
+        if (feature.playerOnly && session?.active != true) return emptyList()
+        val prefix = args[0]
+        val settings = features
+        return when (feature) {
+            FeatureCommand.HOME, FeatureCommand.DELHOME, FeatureCommand.SETHOME, FeatureCommand.HOMES -> {
+                val storage = modules.readyInstance("storage") as? SqliteStorage ?: return emptyList()
+                val names = storage.cachedNames(DestinationGroup.homes(checkNotNull(session).id))
+                if (feature == FeatureCommand.HOMES) return pageSuggestions(names.size, prefix)
+                val candidates = if (feature == FeatureCommand.SETHOME) names + "home" else names
+                matchingSuggestions(candidates.filter { it.length <= settings.homeNameMaxLength }, prefix)
+            }
+            FeatureCommand.WARP, FeatureCommand.SETWARP, FeatureCommand.DELWARP, FeatureCommand.WARPS -> {
+                val storage = modules.readyInstance("storage") as? SqliteStorage ?: return emptyList()
+                val names = storage.cachedNames(DestinationGroup.warps)
+                if (feature == FeatureCommand.WARPS) {
+                    return pageSuggestions(names.count { !settings.perWarpPermissions || canSeeWarp(sender, it) }, prefix)
+                }
+                val candidates = names.filter {
+                    it.length <= settings.warpNameMaxLength &&
+                        it.startsWith(prefix, ignoreCase = true) &&
+                        (!settings.perWarpPermissions || canSeeWarp(sender, it))
+                }
+                matchingSuggestions(candidates, prefix)
+            }
+            FeatureCommand.TPA, FeatureCommand.TPAHERE -> matchingSuggestions(
+                players.onlineSessions()
+                    .filter { it !== session && checkNotNull(viewer).canSee(it.player) }
+                    .map(PlayerSession::name),
+                prefix,
+            )
+            FeatureCommand.TPACCEPT, FeatureCommand.TPDENY, FeatureCommand.TPREQUESTS -> {
+                val teleportation = modules.readyInstance("teleportation") as? Teleportation ?: return emptyList()
+                val pending = teleportation.pending(checkNotNull(session))
+                if (feature == FeatureCommand.TPREQUESTS) return pageSuggestions(pending.size, prefix)
+                matchingSuggestions(pending.map { it.request.from.name }, prefix)
+            }
+            FeatureCommand.BACK, FeatureCommand.SPAWN, FeatureCommand.SETSPAWN -> emptyList()
         }
     }
 
@@ -357,10 +396,13 @@ internal class QuickStartRuntime(
 
     suspend fun doctor(): List<Message> = buildList {
         add(Message("doctor.readiness", "state" to readiness.name.lowercase(Locale.ROOT), "strategy" to config.startup))
-        add(configProblem?.let { Message("doctor.config-error", "detail" to it) } ?: Message("doctor.config-valid"))
-        messageProblem?.let { add(Message("doctor.message-error", "detail" to it)) }
         startupProblem?.let { add(Message("doctor.startup-failure", "detail" to it)) }
+        configProblem?.let { add(Message("doctor.config-error", "detail" to it)) }
+        messageProblem?.let { add(Message("doctor.message-error", "detail" to it)) }
         val statuses = modules()
+        statuses.forEach { module ->
+            module.failure?.let { add(Message("doctor.module-failed", "module" to module.id, "detail" to it)) }
+        }
         val storageStatus = statuses.first { it.id == "storage" }
         when (storageStatus.state) {
             ModuleState.READY -> {
@@ -379,9 +421,7 @@ internal class QuickStartRuntime(
             ModuleState.DISABLED -> add(Message("doctor.sqlite-disabled"))
             else -> add(Message("doctor.sqlite-state", "state" to storageStatus.state.name.lowercase(Locale.ROOT)))
         }
-        statuses.forEach { module ->
-            module.failure?.let { add(Message("doctor.module-failed", "module" to module.id, "detail" to it)) }
-        }
+        if (configProblem == null) add(Message("doctor.config-valid"))
         add(Message("doctor.commands", "timings" to commands.describe()))
     }
 

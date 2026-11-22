@@ -30,14 +30,20 @@ class SqliteStorageTest {
             assertEquals(SaveResult.LIMIT_REACHED, storage.save(homes, "nether", position, 1))
             assertEquals(SaveResult.CREATED, storage.save(DestinationGroup.warps, "town", position))
             assertEquals(SaveResult.CREATED, storage.save(DestinationGroup.spawn, "spawn", position))
+            assertEquals(listOf("home"), storage.cachedNames(homes))
+            assertEquals(listOf("town"), storage.cachedNames(DestinationGroup.warps))
+            assertTrue(storage.cachedNames(DestinationGroup.homes(UUID.randomUUID())).isEmpty())
         }
         useStorage(file) { storage ->
+            assertEquals(listOf("home"), storage.cachedNames(homes))
+            assertEquals(listOf("town"), storage.cachedNames(DestinationGroup.warps))
             assertEquals(listOf("home"), storage.names(homes))
             assertEquals(position.copy(y = 70.0), storage.get(homes, "home"))
             assertEquals(position, storage.get(DestinationGroup.warps, "town"))
             assertEquals(position, storage.get(DestinationGroup.spawn, "spawn"))
             assertTrue(storage.delete(homes, "home"))
             assertFalse(storage.delete(homes, "home"))
+            assertTrue(storage.cachedNames(homes).isEmpty())
         }
         useStorage(file) { storage -> assertNull(storage.get(homes, "home")) }
     }
@@ -50,6 +56,7 @@ class SqliteStorageTest {
             assertEquals(5, results.count { it == SaveResult.CREATED })
             assertEquals(27, results.count { it == SaveResult.LIMIT_REACHED })
             assertEquals(5, storage.names(homes).size)
+            assertEquals(storage.names(homes), storage.cachedNames(homes))
             assertTrue(storage.names(DestinationGroup.homes(UUID.randomUUID())).isEmpty())
         }
     }

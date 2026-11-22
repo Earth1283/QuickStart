@@ -2,7 +2,6 @@ package io.github.Earth1283.quickStart.platform
 
 import io.github.Earth1283.quickStart.core.Position
 import java.util.EnumMap
-import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -98,10 +97,8 @@ internal class Players(private val scope: CoroutineScope) {
         sessions.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
     }
 
-    fun names(prefix: String): List<String> = synchronized(gate) {
-        sessions.values.map(PlayerSession::name)
-            .filter { it.startsWith(prefix, ignoreCase = true) }
-            .sortedBy { it.lowercase(Locale.ROOT) }
+    fun onlineSessions(): List<PlayerSession> = synchronized(gate) {
+        sessions.values.filter(PlayerSession::active)
     }
 
     fun onDeparture(listener: (PlayerSession) -> Unit): AutoCloseable = synchronized(gate) {

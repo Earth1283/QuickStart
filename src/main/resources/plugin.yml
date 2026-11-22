@@ -26,6 +26,10 @@ commands:
     description: Decline a teleport request.
     usage: /<command> [player]
     permission: quickstart.tpa
+  tprequests:
+    description: Browse your incoming teleport requests.
+    usage: /<command> [page]
+    permission: quickstart.tpa
   back:
     description: Return to your previous location.
     usage: /<command>
@@ -44,7 +48,7 @@ commands:
     permission: quickstart.homes
   homes:
     description: List your saved homes.
-    usage: /<command>
+    usage: /<command> [page]
     permission: quickstart.homes
   setwarp:
     description: Save a server warp at your current location.
@@ -60,7 +64,7 @@ commands:
     permission: quickstart.warps.manage
   warps:
     description: List the server warps you can use.
-    usage: /<command>
+    usage: /<command> [page]
     permission: quickstart.warps
   setspawn:
     description: Save the server spawn at your current location.

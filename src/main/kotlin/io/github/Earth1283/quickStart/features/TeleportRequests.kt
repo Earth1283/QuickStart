@@ -1,9 +1,11 @@
 package io.github.Earth1283.quickStart.features
 
 import io.github.Earth1283.quickStart.core.Position
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 internal data class TeleportRequest<P>(
+    val id: UUID,
     val from: P,
     val to: P,
     val bringHere: Boolean,
@@ -11,7 +13,13 @@ internal data class TeleportRequest<P>(
     val destination: Position?,
 )
 
-internal enum class RequestStatus { SENT, COOLDOWN, DISCONNECTED }
+internal sealed interface RequestSend<out P> {
+    data class Sent<P>(val request: TeleportRequest<P>) : RequestSend<P>
+    data object Cooldown : RequestSend<Nothing>
+    data object Disconnected : RequestSend<Nothing>
+}
+
+internal data class PendingRequest<P>(val request: TeleportRequest<P>, val secondsRemaining: Long)
 
 internal class TeleportRequests<P>(private val active: (P) -> Boolean, private val clock: () -> Long = System::nanoTime) {
     private val outgoing = mutableMapOf<P, TeleportRequest<P>>()
@@ -19,39 +27,70 @@ internal class TeleportRequests<P>(private val active: (P) -> Boolean, private v
     private val lastSent = mutableMapOf<P, Long>()
 
     @Synchronized
-    fun send(from: P, to: P, bringHere: Boolean, cooldown: Int, expiration: Int, destination: Position? = null): RequestStatus {
+    fun send(from: P, to: P, bringHere: Boolean, cooldown: Int, expiration: Int, destination: Position? = null): RequestSend<P> {
         val now = clock()
-        if (!active(from) || !active(to)) return RequestStatus.DISCONNECTED
+        if (!active(from) || !active(to)) return RequestSend.Disconnected
         val previous = lastSent[from]
-        if (previous != null && now - previous < TimeUnit.SECONDS.toNanos(cooldown.toLong())) return RequestStatus.COOLDOWN
+        if (previous != null && now - previous < TimeUnit.SECONDS.toNanos(cooldown.toLong())) return RequestSend.Cooldown
         removeOutgoing(from)
-        val request = TeleportRequest(from, to, bringHere, now + TimeUnit.SECONDS.toNanos(expiration.toLong()), destination)
+        val request = TeleportRequest(UUID.randomUUID(), from, to, bringHere, now + TimeUnit.SECONDS.toNanos(expiration.toLong()), destination)
         outgoing[from] = request
         incoming.getOrPut(to, ::LinkedHashMap)[from] = request
         lastSent[from] = now
-        return RequestStatus.SENT
+        return RequestSend.Sent(request)
+    }
+
+    fun take(recipient: P, fromMatches: (P) -> Boolean): TeleportRequest<P>? =
+        takeMatching(recipient) { fromMatches(it.from) }
+
+    fun takeById(recipient: P, id: UUID): TeleportRequest<P>? =
+        takeMatching(recipient) { it.id == id }
+
+    @Synchronized
+    private fun takeMatching(recipient: P, matches: (TeleportRequest<P>) -> Boolean): TeleportRequest<P>? {
+        val now = clock()
+        val recipientActive = active(recipient)
+        val requests = incoming[recipient]?.reversed()?.values?.iterator() ?: return null
+        while (requests.hasNext()) {
+            val request = requests.next()
+            val valid = recipientActive && isLive(request, now)
+            val selected = valid && matches(request)
+            if (!valid || selected) {
+                requests.remove()
+                outgoing.remove(request.from)
+            }
+            if (selected) {
+                if (incoming[recipient]?.isEmpty() == true) incoming.remove(recipient)
+                return request
+            }
+        }
+        if (incoming[recipient]?.isEmpty() == true) incoming.remove(recipient)
+        return null
     }
 
     @Synchronized
-    fun take(recipient: P, fromMatches: (P) -> Boolean): TeleportRequest<P>? {
-        val requests = incoming[recipient] ?: return null
+    fun pending(recipient: P): List<PendingRequest<P>> {
+        val requests = incoming[recipient] ?: return emptyList()
         val now = clock()
         val recipientActive = active(recipient)
-        // Check expiry on lookup. Replacement and disconnect also remove both index entries.
-        val newestFirst = requests.reversed().values.iterator()
-        while (newestFirst.hasNext()) {
-            val request = newestFirst.next()
-            val valid = recipientActive && now - request.expiresAt < 0 && active(request.from)
-            val matches = valid && fromMatches(request.from)
-            if (!valid || matches) {
-                newestFirst.remove()
-                outgoing.remove(request.from)
-                if (requests.isEmpty()) incoming.remove(recipient)
+        return buildList {
+            val iterator = requests.reversed().values.iterator()
+            while (iterator.hasNext()) {
+                val request = iterator.next()
+                if (recipientActive && isLive(request, now)) {
+                    val remaining = request.expiresAt - now
+                    add(PendingRequest(request, TimeUnit.NANOSECONDS.toSeconds(remaining - 1) + 1))
+                } else {
+                    iterator.remove()
+                    outgoing.remove(request.from)
+                }
             }
-            if (matches) return request
+            if (requests.isEmpty()) incoming.remove(recipient)
         }
-        return null
     }
+
+    private fun isLive(request: TeleportRequest<P>, now: Long): Boolean =
+        now - request.expiresAt < 0 && active(request.from)
 
     @Synchronized
     fun disconnect(player: P) {
