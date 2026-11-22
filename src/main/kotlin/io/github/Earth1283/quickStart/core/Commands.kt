@@ -93,6 +93,8 @@ internal class CommandActor(
     private val scheduler: ServerScheduler,
     private val messages: () -> Messages,
 ) {
+    val name: String get() = session?.name ?: sender.name
+
     fun player(): PlayerSession = session ?: throw CommandProblem("common.player-only")
 
     fun render(message: Message): Component = messages().render(message)

@@ -29,6 +29,9 @@ internal class ServerScheduler(private val plugin: Plugin) {
         entity.scheduler.run(plugin, { run.run() }, retired)
     }
 
+    fun eachEntityTick(entity: Entity, retired: Runnable, action: (ScheduledTask) -> Unit): ScheduledTask? =
+        entity.scheduler.runAtFixedRate(plugin, action, retired, 1, 1)
+
     suspend fun <T> async(action: () -> T): T = withContext(Dispatchers.Default) { action() }
 
     suspend fun <T> blocking(action: () -> T): T = withContext(Dispatchers.IO) { action() }

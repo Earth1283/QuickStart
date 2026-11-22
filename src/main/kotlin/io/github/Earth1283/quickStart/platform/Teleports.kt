@@ -2,8 +2,10 @@ package io.github.Earth1283.quickStart.platform
 
 import io.github.Earth1283.quickStart.core.Message
 import io.github.Earth1283.quickStart.core.Position
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.selects.select
+import net.kyori.adventure.text.Component
 import org.bukkit.Location
 import org.bukkit.Server
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause
@@ -11,6 +13,8 @@ import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause
 internal enum class TeleportResult(val failureMessage: Message?) {
     SUCCESS(null),
     CANCELLED(Message("teleport.cancelled")),
+    MOVED(Message("teleport.cancelled-movement")),
+    DAMAGED(Message("teleport.cancelled-damage")),
     COOLDOWN(Message("teleport.cooldown")),
     IN_PROGRESS(Message("teleport.in-progress")),
     WORLD_UNAVAILABLE(Message("teleport.world-unavailable")),
@@ -21,11 +25,22 @@ internal enum class TeleportAction { HOME, WARP, SPAWN, BACK, REQUEST }
 
 internal data class TeleportCooldown(val action: TeleportAction, val seconds: Int)
 
+internal class TeleportWarmup(
+    private val origin: Location,
+    val task: ScheduledTask,
+    val completion: CompletableDeferred<TeleportResult>,
+) {
+    fun movedTo(location: Location): Boolean = location.x != origin.x || location.y != origin.y ||
+        location.z != origin.z || location.world != origin.world
+}
+
 internal class Teleports(
     private val server: Server,
     private val scheduler: ServerScheduler,
     private val backHistory: BackHistory?,
     private val recordBack: () -> Boolean,
+    private val warmupSeconds: () -> Int,
+    private val render: (Message) -> Component,
 ) {
     suspend fun position(session: PlayerSession): Position = scheduler.entity(session.player) {
         session.requireActive()
@@ -37,9 +52,10 @@ internal class Teleports(
         position: Position,
         cooldown: TeleportCooldown? = null,
         anchor: PlayerSession? = null,
+        warmup: Boolean = true,
     ): TeleportResult {
         val completion = CompletableDeferred<TeleportResult>()
-        scheduler.entity(session.player) { startMove(session, position, cooldown, completion, anchor) }
+        scheduler.entity(session.player) { startMove(session, position, cooldown, completion, anchor, warmup) }
         return awaitMove(session, completion)
     }
 
@@ -64,10 +80,11 @@ internal class Teleports(
         cooldown: TeleportCooldown?,
         completion: CompletableDeferred<TeleportResult>,
         anchor: PlayerSession?,
+        warmup: Boolean = true,
     ) {
         val blocked = when {
             !session.active || anchor?.active == false -> TeleportResult.DISCONNECTED
-            session.teleportInFlight -> TeleportResult.IN_PROGRESS
+            session.teleportInFlight || session.teleportWarmup != null -> TeleportResult.IN_PROGRESS
             else -> null
         }
         if (blocked != null) {
@@ -85,13 +102,95 @@ internal class Teleports(
             return
         }
         val destination = Location(world, position.x, position.y, position.z, position.yaw, position.pitch)
+        val seconds = if (warmup) warmupSeconds() else 0
+        if (seconds == 0) {
+            teleport(session, destination, cooldown, completion)
+        } else {
+            startWarmup(session, anchor, seconds, completion) {
+                if (server.getWorld(position.worldId) === world) teleport(session, destination, cooldown, completion)
+                else completion.complete(TeleportResult.WORLD_UNAVAILABLE)
+            }
+        }
+    }
+
+    fun checkWarmupMovement(session: PlayerSession, destination: Location) {
+        if (session.teleportWarmup?.movedTo(destination) == true) cancelWarmup(session, TeleportResult.MOVED)
+    }
+
+    fun cancelWarmup(session: PlayerSession, result: TeleportResult) {
+        val warmup = stopWarmup(session) ?: return
+        try {
+            if (session.active) session.player.sendActionBar(render(checkNotNull(result.failureMessage)))
+        } finally {
+            warmup.completion.complete(result)
+        }
+    }
+
+    private fun startWarmup(
+        session: PlayerSession,
+        anchor: PlayerSession?,
+        seconds: Int,
+        completion: CompletableDeferred<TeleportResult>,
+        finish: () -> Unit,
+    ) {
+        val player = session.player
+        val origin = player.location
+        var ticksLeft = seconds * TICKS_PER_SECOND
+        val firstNotice = warmupNotice(seconds)
+        val task = scheduler.eachEntityTick(player, { completion.complete(TeleportResult.DISCONNECTED) }) {
+            val warmup = checkNotNull(session.teleportWarmup)
+            try {
+                ticksLeft--
+                when {
+                    !session.active || anchor?.active == false -> cancelWarmup(session, TeleportResult.DISCONNECTED)
+                    warmup.movedTo(player.location) -> cancelWarmup(session, TeleportResult.MOVED)
+                    ticksLeft == 0 -> {
+                        stopWarmup(session)
+                        player.sendActionBar(Component.empty())
+                        finish()
+                    }
+                    ticksLeft % TICKS_PER_SECOND == 0 -> player.sendActionBar(warmupNotice(ticksLeft / TICKS_PER_SECOND))
+                }
+            } catch (failure: Exception) {
+                stopWarmup(session)
+                completion.completeExceptionally(failure)
+            }
+        }
+        if (task == null) {
+            completion.complete(TeleportResult.DISCONNECTED)
+            return
+        }
+        session.teleportWarmup = TeleportWarmup(origin, task, completion)
+        try {
+            player.sendActionBar(firstNotice)
+        } catch (failure: Exception) {
+            stopWarmup(session)
+            completion.completeExceptionally(failure)
+        }
+    }
+
+    private fun warmupNotice(seconds: Int) = render(Message("teleport.warmup", "seconds" to seconds))
+
+    private fun stopWarmup(session: PlayerSession): TeleportWarmup? {
+        val warmup = session.teleportWarmup ?: return null
+        session.teleportWarmup = null
+        warmup.task.cancel()
+        return warmup
+    }
+
+    private fun teleport(
+        session: PlayerSession,
+        destination: Location,
+        cooldown: TeleportCooldown?,
+        completion: CompletableDeferred<TeleportResult>,
+    ) {
         val origin = if (backHistory != null && recordBack()) session.player.location.snapshot() else null
         session.teleportInFlight = true
         try {
             session.player.teleportAsync(destination, TeleportCause.PLUGIN).whenComplete { success, failure ->
                 if (success == true) {
                     if (origin != null && recordBack()) backHistory?.record(session, origin)
-                    if (enforceCooldown) session.recordTeleport(cooldown.action)
+                    if (cooldown != null && cooldown.seconds > 0) session.recordTeleport(cooldown.action)
                 }
                 session.teleportInFlight = false
                 when {
@@ -102,7 +201,7 @@ internal class Teleports(
             }
         } catch (failure: Exception) {
             session.teleportInFlight = false
-            throw failure
+            completion.completeExceptionally(failure)
         }
     }
 
@@ -111,4 +210,8 @@ internal class Teleports(
             completion.onAwait { it }
             session.disconnected.onAwait { TeleportResult.DISCONNECTED }
         }
+
+    private companion object {
+        const val TICKS_PER_SECOND = 20
+    }
 }

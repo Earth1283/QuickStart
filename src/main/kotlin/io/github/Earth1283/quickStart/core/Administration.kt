@@ -1,5 +1,6 @@
 package io.github.Earth1283.quickStart.core
 
+import io.github.Earth1283.quickStart.features.ModerationCommand
 import java.util.Locale
 import net.kyori.adventure.text.Component
 import org.bukkit.command.CommandSender
@@ -9,6 +10,11 @@ internal class Administration(private val runtime: QuickStartRuntime) {
         val words = args.map { it.lowercase(Locale.ROOT) }
         if (words.isEmpty() || words == listOf("help")) {
             actor.reply(actor.onOwner { help(it, player = actor.session != null) })
+            return
+        }
+        if (words.first() == "mod") {
+            if (args.size != 2) throw CommandProblem("moderation.dialog.usage")
+            runtime.openModeration(args[1], actor)
             return
         }
         if (!actor.onOwner { it.hasPermission("quickstart.admin") }) throw CommandProblem("common.no-permission")
@@ -36,9 +42,14 @@ internal class Administration(private val runtime: QuickStartRuntime) {
 
     fun complete(sender: CommandSender, args: Array<out String>): List<String> {
         val admin = sender.hasPermission("quickstart.admin")
+        val moderator = runtime.canModerate(sender)
         val suggestions = when {
-            args.size == 1 && admin -> listOf("help", "modules", "doctor", "diagnostics", "reload")
-            args.size == 1 -> listOf("help")
+            args.size == 1 -> buildList {
+                add("help")
+                if (admin) addAll(listOf("modules", "doctor", "diagnostics", "reload"))
+                if (moderator) add("mod")
+            }
+            args.size == 2 && moderator && args.first().equals("mod", ignoreCase = true) -> return runtime.completeModeration(sender, args[1])
             args.size == 2 && admin && args.first().equals("diagnostics", ignoreCase = true) -> listOf("startup")
             else -> return emptyList()
         }
@@ -61,6 +72,18 @@ internal class Administration(private val runtime: QuickStartRuntime) {
         }
         if (groups.isNotEmpty()) {
             add(Message("help.commands", "commands" to MessageGroup(groups, Component.newline())))
+        }
+        if ("moderation" in runtime.config.enabledModules) {
+            val actions = ModerationCommand.entries.filter { sender.hasPermission(it.permission) }.map { command ->
+                Message("ui.control", "action" to ChatAction(
+                    "${command.id} ", Message("help.moderation-command", "command" to command.id),
+                    Message("help.moderation-usage", "usage" to command.usage), suggest = true, consoleText = command.usage,
+                ))
+            }
+            if (actions.isNotEmpty()) {
+                val dialog = helpAction("mod", "qs mod ", "/qs mod <target>", suggest = true)
+                add(Message("help.group", "section" to Message("help.sections.moderation"), "actions" to actionGroup(listOf(dialog) + actions)))
+            }
         }
         if (sender.hasPermission("quickstart.admin")) {
             val actions = listOf(

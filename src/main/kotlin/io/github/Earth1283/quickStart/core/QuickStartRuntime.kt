@@ -4,6 +4,8 @@ import io.github.Earth1283.quickStart.api.ModuleState
 import io.github.Earth1283.quickStart.api.QuickStartApi
 import io.github.Earth1283.quickStart.api.Readiness
 import io.github.Earth1283.quickStart.features.Homes
+import io.github.Earth1283.quickStart.features.Moderation
+import io.github.Earth1283.quickStart.features.ModerationCommand
 import io.github.Earth1283.quickStart.features.Spawn
 import io.github.Earth1283.quickStart.features.Teleportation
 import io.github.Earth1283.quickStart.features.Warps
@@ -13,8 +15,10 @@ import io.github.Earth1283.quickStart.platform.EntityUnavailable
 import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.Players
 import io.github.Earth1283.quickStart.platform.ServerScheduler
+import io.github.Earth1283.quickStart.platform.TeleportResult
 import io.github.Earth1283.quickStart.platform.Teleports
 import io.github.Earth1283.quickStart.platform.snapshot
+import io.papermc.paper.event.player.AsyncChatEvent
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
@@ -28,6 +32,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.format.NamedTextColor
 import org.bukkit.command.Command
 import org.bukkit.command.CommandSender
 import org.bukkit.command.TabExecutor
@@ -36,9 +42,12 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
 import org.bukkit.event.HandlerList
 import org.bukkit.event.Listener
+import org.bukkit.event.entity.EntityDamageEvent
 import org.bukkit.event.entity.PlayerDeathEvent
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent
+import org.bukkit.event.player.PlayerCommandPreprocessEvent
 import org.bukkit.event.player.PlayerJoinEvent
+import org.bukkit.event.player.PlayerMoveEvent
 import org.bukkit.event.player.PlayerQuitEvent
 import org.bukkit.event.player.PlayerRespawnEvent
 import org.bukkit.event.player.PlayerTeleportEvent
@@ -59,8 +68,18 @@ internal class QuickStartRuntime(
     private val scope = CoroutineScope(lifecycle + Dispatchers.Default)
     private val scheduler = ServerScheduler(plugin)
     private val players = Players(scope)
+    private val moderationEnabled = "moderation" in config.enabledModules
     private val backHistory = if ("teleportation" in config.enabledModules) BackHistory(players) else null
-    private val teleports by lazy { Teleports(plugin.server, scheduler, backHistory) { features.backOnTeleport } }
+    private val teleports by lazy {
+        Teleports(
+            plugin.server,
+            scheduler,
+            backHistory,
+            recordBack = { features.backOnTeleport },
+            warmupSeconds = { features.teleportWarmupSeconds },
+            render = { messages.render(it) },
+        )
+    }
     private val sqlite = lazy {
         SqliteStorage(plugin.dataFolder.toPath().resolve("quickstart.db"), config.maxPendingOperations) { report("SQLite shutdown", it) }
     }
@@ -71,6 +90,13 @@ internal class QuickStartRuntime(
     private val messageFile = File(plugin.dataFolder, "message.yml")
     private val defaultMessages = checkNotNull(plugin.getResource(messageFile.name))
         .reader(Charsets.UTF_8).use(Messages::loadDefaults)
+    private val colorStartupLogs = System.getenv("NO_COLOR").isNullOrEmpty() &&
+        System.getenv("TERM")?.trim()?.lowercase(Locale.ROOT) !in setOf("dumb", "unknown") &&
+        when (System.getProperty("terminal.ansi")?.lowercase(Locale.ROOT)) {
+            "true" -> true
+            "false" -> false
+            else -> System.console()?.isTerminal == true
+        }
     @Volatile private var settings = ReloadableSettings(config.features, defaultMessages)
     private val features get() = settings.features
     private val messages get() = settings.messages
@@ -90,7 +116,7 @@ internal class QuickStartRuntime(
 
     private fun definitions(): List<ModuleDefinition> {
         val persistent = listOf("homes", "warps", "spawn")
-        val storage = ModuleDefinition("storage", persistent.any(config.enabledModules::contains), critical = true) { sqlite.value }
+        val storage = ModuleDefinition("storage", moderationEnabled || persistent.any(config.enabledModules::contains), critical = true) { sqlite.value }
         fun feature(id: String, create: () -> CommandModule) = ModuleDefinition(
             id = id,
             enabled = id in config.enabledModules,
@@ -98,6 +124,9 @@ internal class QuickStartRuntime(
         ) { create() }
         return listOf(
             storage,
+            ModuleDefinition("moderation", moderationEnabled, critical = true, required = listOf("storage")) { moduleScope ->
+                Moderation(sqlite.value, players, scheduler, plugin.server, moduleScope, { messages.render(it) }, ::submitDialog)
+            },
             feature("teleportation") { Teleportation(players, scheduler, teleports, checkNotNull(backHistory)) },
             feature("homes") { Homes(sqlite.value, teleports) },
             feature("warps") { Warps(sqlite.value, teleports) },
@@ -114,7 +143,7 @@ internal class QuickStartRuntime(
             }
         } catch (failure: Exception) {
             messageProblem = message(failure)
-            plugin.logger.log(Level.WARNING, "Could not load message.yml. Using default messages.", failure)
+            plugin.componentLogger.warn(startupText("Could not load message.yml. Using default messages.", NamedTextColor.GOLD), failure)
         }
         val server = plugin.server
         server.pluginManager.registerEvents(this, plugin)
@@ -123,7 +152,7 @@ internal class QuickStartRuntime(
             backListener = listener
             server.pluginManager.registerEvents(listener, plugin)
         }
-        for (id in listOf("qs") + FeatureCommand.byId.keys) {
+        for (id in listOf("qs") + FeatureCommand.byId.keys + ModerationCommand.byId.keys) {
             val command = checkNotNull(plugin.getCommand(id)) { "Missing command registration for $id" }
             command.setExecutor(this)
             command.tabCompleter = this
@@ -131,7 +160,7 @@ internal class QuickStartRuntime(
         server.servicesManager.register(QuickStartApi::class.java, this, plugin, ServicePriority.Normal)
         startup.bootstrapMillis = startup.elapsedMillis()
         if (configurationFailure != null) {
-            report("Configuration", configurationFailure)
+            reportStartupFailure("Configuration", configurationFailure)
             finishBoot(Readiness.FAILED)
         } else {
             scope.launch { boot() }
@@ -179,7 +208,7 @@ internal class QuickStartRuntime(
             finishBoot(Readiness.FAILED)
         } catch (failure: Exception) {
             startupProblem = message(failure)
-            report("Startup", failure)
+            reportStartupFailure("Startup", failure)
             finishBoot(Readiness.FAILED)
         }
     }
@@ -188,7 +217,15 @@ internal class QuickStartRuntime(
         if (!state.compareAndSet(Readiness.STARTING, result)) return
         if (result == Readiness.READY) startup.readinessMillis = startup.elapsedMillis()
         bootFinished.complete(result)
-        plugin.logger.info("${config.startup} startup ${result.name.lowercase(Locale.ROOT)} after ${startup.elapsedMillis()} ms")
+        val statusColor = when (result) {
+            Readiness.READY -> NamedTextColor.GREEN
+            Readiness.DEGRADED -> NamedTextColor.GOLD
+            Readiness.FAILED -> NamedTextColor.RED
+            else -> NamedTextColor.GRAY
+        }
+        plugin.componentLogger.info(startupText("${config.startup} ", NamedTextColor.AQUA).append(
+            startupText("startup ${result.name.lowercase(Locale.ROOT)} after ${startup.elapsedMillis()} ms", statusColor),
+        ))
     }
 
     fun close() {
@@ -210,16 +247,30 @@ internal class QuickStartRuntime(
 
     @EventHandler(priority = EventPriority.HIGHEST)
     fun onPreLogin(event: AsyncPlayerPreLoginEvent) {
-        if (config.startup != StartupStrategy.ALL_AT_ONCE || readiness == Readiness.READY ||
-            event.loginResult != AsyncPlayerPreLoginEvent.Result.ALLOWED
-        ) return
-        val key = if (readiness == Readiness.FAILED) "login.failed" else "login.starting"
-        event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, messages.render(Message(key)))
+        if (event.loginResult != AsyncPlayerPreLoginEvent.Result.ALLOWED) return
+        if (moderationEnabled) {
+            val moderation = moderation()
+            if (moderation == null) {
+                val key = if (readiness == Readiness.STARTING) "login.starting" else "moderation.login-unavailable"
+                event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, messages.render(Message(key)))
+                return
+            }
+            val ban = moderation.banNotice(event.uniqueId, event.address)
+            if (ban != null) {
+                event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED, ban)
+                return
+            }
+        }
+        if (config.startup == StartupStrategy.ALL_AT_ONCE && readiness != Readiness.READY) {
+            val key = if (readiness == Readiness.FAILED) "login.failed" else "login.starting"
+            event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_OTHER, messages.render(Message(key)))
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onJoin(event: PlayerJoinEvent) {
         val session = players.joined(event.player) ?: return
+        if (moderation()?.kickIfBanned(session) == true) return
         val spawnEnabled = "spawn" in config.enabledModules
         if (spawnEnabled && features.firstJoinSpawn && !event.player.hasPlayedBefore()) {
             session.submit { spawnTeleport(session) }
@@ -230,6 +281,66 @@ internal class QuickStartRuntime(
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onQuit(event: PlayerQuitEvent) = players.quit(event.player)
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onChat(event: AsyncChatEvent) {
+        val moderation = moderation() ?: return
+        val session = players.session(event.player) ?: return
+        val notice = moderation.muteNotice(session) ?: return
+        event.isCancelled = true
+        val actor = CommandActor(session.player, session, scheduler) { messages }
+        scope.launch { actor.reply(notice) }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    fun onChatCommand(event: PlayerCommandPreprocessEvent) {
+        if (!Moderation.isChatCommand(event.message)) return
+        val moderation = moderation() ?: return
+        val session = players.session(event.player) ?: return
+        val notice = moderation.muteNotice(session) ?: return
+        event.isCancelled = true
+        event.player.sendMessage(messages.render(notice))
+    }
+
+    private fun moderation(): Moderation? = if (moderationEnabled) modules.readyInstance("moderation") as? Moderation else null
+
+    fun canModerate(sender: CommandSender): Boolean = moderationEnabled && ModerationCommand.entries.any { sender.hasPermission(it.permission) }
+
+    suspend fun openModeration(target: String, actor: CommandActor) {
+        val moderation = moderation() ?: throw CommandProblem("moderation.unavailable")
+        moderation.openMenu(target, actor)
+    }
+
+    fun completeModeration(sender: CommandSender, prefix: String): List<String> = moderation()?.completeMenu(sender, prefix).orEmpty()
+
+    private fun submitDialog(actor: CommandActor, action: suspend () -> Unit) {
+        val session = actor.player()
+        if (!session.submit { handleErrors(actor, action) } && session.active) {
+            scope.launch { actor.reply("common.command-queue-full") }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onMove(event: PlayerMoveEvent) {
+        if (!event.hasChangedPosition()) return
+        val session = players.session(event.player) ?: return
+        if (session.teleportWarmup != null) teleports.checkWarmupMovement(session, event.to)
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    fun onTeleportMovement(event: PlayerTeleportEvent) = onMove(event)
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    @Suppress("DEPRECATION", "REMOVAL")
+    fun onDamage(event: EntityDamageEvent) {
+        val player = event.entity as? Player ?: return
+        val session = players.session(player) ?: return
+        if (session.teleportWarmup == null) return
+        // Absorption can take damage without reducing the player's health.
+        if (event.finalDamage > 0 || event.getDamage(EntityDamageEvent.DamageModifier.ABSORPTION) < 0) {
+            teleports.cancelWarmup(session, TeleportResult.DAMAGED)
+        }
+    }
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onRespawn(event: PlayerRespawnEvent) {
@@ -269,6 +380,7 @@ internal class QuickStartRuntime(
 
     override fun onCommand(sender: CommandSender, command: Command, label: String, args: Array<out String>): Boolean {
         val feature = FeatureCommand.byId[command.name]
+        val sanction = ModerationCommand.byId[command.name]
         val player = sender as? Player
         val session = player?.let(players::session)
         if (player != null && session == null) {
@@ -280,11 +392,18 @@ internal class QuickStartRuntime(
             val started = TimeSource.Monotonic.markNow()
             try {
                 handleErrors(actor) {
-                    if (feature == null) administration.execute(actor, args)
-                    else executeFeature(actor, feature, args)
+                    when {
+                        sanction != null -> {
+                            if (!moderationEnabled) throw ModuleUnavailable("moderation is disabled")
+                            val moderation = moderation() ?: throw CommandProblem("moderation.unavailable")
+                            moderation.execute(sanction, args, actor)
+                        }
+                        feature != null -> executeFeature(actor, feature, args)
+                        else -> administration.execute(actor, args)
+                    }
                 }
             } finally {
-                if (feature != null) commands.record(started.elapsedNow().inWholeNanoseconds)
+                if (feature != null || sanction != null) commands.record(started.elapsedNow().inWholeNanoseconds)
             }
         }
         if (session == null) scope.launch { action() }
@@ -314,6 +433,10 @@ internal class QuickStartRuntime(
 
     override fun onTabComplete(sender: CommandSender, command: Command, alias: String, args: Array<out String>): List<String> {
         if (command.name == "qs") return administration.complete(sender, args)
+        ModerationCommand.byId[command.name]?.let {
+            if (!sender.hasPermission(it.permission)) return emptyList()
+            return moderation()?.complete(it, args).orEmpty()
+        }
         val feature = FeatureCommand.byId[command.name] ?: return emptyList()
         if (args.size != 1 || feature.module !in config.enabledModules || !sender.hasPermission(feature.permission)) {
             return emptyList()
@@ -447,6 +570,13 @@ internal class QuickStartRuntime(
     private fun report(context: String, failure: Throwable) {
         plugin.logger.log(Level.SEVERE, "$context: ${message(failure)}", failure)
     }
+
+    private fun reportStartupFailure(context: String, failure: Throwable) {
+        plugin.componentLogger.error(startupText("$context: ${message(failure)}", NamedTextColor.RED), failure)
+    }
+
+    private fun startupText(text: String, color: NamedTextColor): Component =
+        Component.text(text, color.takeIf { colorStartupLogs })
 
     private fun message(failure: Throwable) = failure.message ?: failure.javaClass.simpleName
 }

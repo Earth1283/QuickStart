@@ -1,6 +1,6 @@
 # QuickStart
 
-QuickStart provides homes, warps, server spawn, and player teleport requests for Paper and Folia. Version 0.1 targets Minecraft 26.1.2 and Java 25.
+QuickStart provides homes, warps, server spawn, player teleport requests, and moderation for Paper and Folia. Version 0.1 targets Minecraft 26.1.2 and Java 25.
 
 ## Install
 
@@ -12,7 +12,9 @@ Run `./gradlew build` and copy `build/libs/QuickStart-0.1.0.jar` into the server
 | `LAZY` | Starts required services and prepares each enabled feature on its first use. |
 | `ALL_AT_ONCE` | Prepares every enabled feature before accepting logins. Players who connect during startup can retry once the server is ready. |
 
-Use `/qs modules` to inspect module states and `/qs doctor` to check configuration and storage. If required storage fails, `ADHD` and `LAZY` continue to serve features that are independent of SQLite. `ALL_AT_ONCE` rejects logins until the startup error is resolved and the server is restarted.
+Use `/qs modules` to inspect module states and `/qs doctor` to check configuration and storage. With moderation enabled, QuickStart requires the moderation database to load before admitting players. With moderation disabled, `ADHD` and `LAZY` can serve features that are independent of SQLite after a storage failure. `ALL_AT_ONCE` rejects logins until the startup error is resolved and the server is restarted.
+
+QuickStart colors startup messages automatically in an interactive terminal and honors the server's `terminal.ansi` setting. A nonempty `NO_COLOR` or a `TERM` of `dumb` or `unknown` disables QuickStart's startup colors.
 
 ## Commands
 
@@ -34,11 +36,36 @@ Incoming requests show when they expire and have clickable Accept and Deny butto
 
 Home, warp, spawn, request sending, request teleporting, and `/back` each have an independent cooldown. Outgoing requests, request teleports, and `/back` default to five seconds through `teleportation.cooldown-seconds`. The optional `request-send-cooldown-seconds`, `request-teleport-cooldown-seconds`, and `back-cooldown-seconds` settings override that default under `teleportation`.
 
-`/qs reload` applies home limits, warp visibility, first-join spawn, teleportation settings, and messages. Startup strategy, module selection, and warmup settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
+`/home`, `/warp`, `/spawn`, `/back`, and accepted teleport requests show a three-second action bar countdown. Moving or taking damage cancels the countdown. Players can look around while they wait. Set `teleportation.warmup-seconds` to `0` for immediate teleports. Automatic join and respawn placement is immediate.
+
+`/qs reload` applies home limits, warp visibility, first-join spawn, teleportation settings, and messages. Startup strategy, module selection, and `performance.warmup` settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
 
 ## Tab completion
 
 Press Tab after a QuickStart command to see matching saved homes, visible warps, online players, pending request senders, page numbers, or available `/qs` subcommands. Completions reflect current permissions and use saved names already in memory.
+
+## Moderation
+
+| Commands | Target |
+| --- | --- |
+| `/ban`, `/tempban <player> <duration> <reason>`, `/unban` | Player name or UUID. |
+| `/ipban` (`/banip`), `/tempipban`, `/unbanip` | IPv4, IPv6, or an online player's name. A name resolves to their current IP address. |
+| `/iprangeban`, `/tempiprangeban`, `/unbaniprange` | An IPv4 or IPv6 CIDR network such as `192.0.2.0/24` or `2001:db8::/32`. |
+| `/mute`, `/tempmute`, `/unmute` | Player name or UUID. |
+| `/ipmute`, `/tempipmute`, `/unmuteip` | IPv4, IPv6, or an online player's name. |
+| `/kick <player> [reason]` | An online player. |
+| `/banstatus <target>`, `/mutestatus <target>` | Active sanctions. An online account lookup also checks its current address. An IP ban lookup includes matching CIDR bans. |
+| `/modhistory <target> [page]` | QuickStart actions for the specified account, IP, or network, newest first. |
+
+Add an expiration immediately after the target for temporary commands. Use a duration like `1h30m` or a UTC deadline like `2027-01-08 18:30`. Seconds are optional for a deadline. Press Tab for duration presets, calendar dates, times, and relevant targets. In long date formats, choose the date, type a space, and press Tab again for the time.
+
+Add a reason after the target or expiration. The reason is required for `/tempban` and optional for other sanctions. Use MiniMessage formatting such as `<red>Repeated griefing</red><newline><gray>Appeal on our forums.</gray>` for styled, multiline notices. Enter `<usedialogue>` as the entire reason to open the multiline editor from a Minecraft Java 1.21.6 or newer client. The editor applies the action after you confirm. Staff can type the reason directly in the command, including from the console. Set the notice templates in `message.yml` to customize the surrounding text.
+
+Use `/qs mod <player>` to open the moderation menu on a compatible client. Choose an action, enter an expiration if the action is temporary, and write a multiline reason before confirming. You can also open the menu with an IP or CIDR target.
+
+Status and History buttons open the corresponding view. Unban and Unmute buttons fill in the exact command for review before sending. QuickStart keeps bans, mutes, kicks, and successful reversals in its SQLite history. Mutes cover public chat and common messaging commands such as `/msg`, `/tell`, `/me`, and `/teammsg`.
+
+Operators have `quickstart.moderation` by default. Every command has its own `quickstart.moderation.<command>` permission. For example, `.tempban` allows temporary bans and `.unban` allows lifting account bans. Grant `quickstart.moderation.inspect` to allow all three inspection commands. Use `/quickstart:ban` or `/quickstart:kick` on servers where vanilla or another plugin handles the short name. Account moderation supports online players, names in the server's profile cache, and explicit UUIDs. Disable the suite with `modules.moderation: false` and restart.
 
 ## Messages
 

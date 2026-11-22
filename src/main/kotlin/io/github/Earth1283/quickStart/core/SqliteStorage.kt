@@ -6,6 +6,7 @@ import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Types
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
@@ -37,6 +38,7 @@ internal class SqliteStorage(
     private val statements = mutableMapOf<String, PreparedStatement>()
     // The SQLite worker publishes immutable name lists after its writes commit.
     private val savedNames = ConcurrentHashMap<DestinationGroup, List<String>>()
+    val sanctions = SanctionIndex()
     val closed = CompletableFuture<Unit>()
     private val runtime = Runtime.getRuntime()
     private val shutdownHook = Thread({
@@ -68,6 +70,99 @@ internal class SqliteStorage(
     fun cachedNames(group: DestinationGroup): List<String> = savedNames[group].orEmpty()
 
     suspend fun health() = query("health check", action = ::verify)
+
+    suspend fun loadSanctions() = query("load moderation", write = true) { database ->
+        val now = Instant.now().toEpochMilli()
+        database.withStatement("DELETE FROM sanctions WHERE expires_at <= ?") { statement ->
+            statement.setLong(1, now)
+            statement.executeUpdate()
+        }
+        database.createStatement().use { statement ->
+            statement.executeQuery("SELECT kind, scope, target, reason, expires_at FROM sanctions").use { rows ->
+                while (rows.next()) {
+                    val target = SanctionTarget.decode(TargetKind.valueOf(rows.getString("scope")), rows.getString("target"))
+                    val key = SanctionKey(SanctionKind.valueOf(rows.getString("kind")), target)
+                    sanctions.put(Sanction(key, rows.getString("reason"), rows.expiration()))
+                }
+            }
+        }
+    }
+
+    suspend fun saveSanction(sanction: Sanction, record: ModerationRecord, canShorten: Boolean): Boolean =
+        query("save sanction", write = true) { database ->
+            val previous = sanctions.get(sanction.key)
+            val deadline = sanction.expiresAt
+            if (!canShorten && deadline != null && previous?.active(Instant.now()) == true &&
+                (previous.expiresAt == null || deadline.isBefore(previous.expiresAt))
+            ) return@query false
+            database.transaction {
+                withStatement(UPSERT_SANCTION) { statement ->
+                    statement.bind(sanction.key)
+                    statement.setString(4, sanction.reason)
+                    statement.setExpiration(5, sanction.expiresAt)
+                    statement.executeUpdate()
+                }
+                recordModeration(record)
+            }
+            sanctions.put(sanction)
+            true
+        }
+
+    suspend fun deleteSanction(key: SanctionKey, record: ModerationRecord): Boolean = query("delete sanction", write = true) { database ->
+        val removed = database.transaction {
+            val active = withStatement(
+                "DELETE FROM sanctions WHERE kind = ? AND scope = ? AND target = ? AND (expires_at IS NULL OR expires_at > ?)",
+            ) { statement ->
+                statement.bind(key)
+                statement.setLong(4, record.time.toEpochMilli())
+                statement.executeUpdate() > 0
+            }
+            if (active) recordModeration(record)
+            active
+        }
+        sanctions.remove(key)
+        removed
+    }
+
+    suspend fun logModeration(record: ModerationRecord) = query("record moderation action", write = true) { database ->
+        database.recordModeration(record)
+    }
+
+    suspend fun moderationHistory(target: SanctionTarget, limit: Int, offset: Long): List<ModerationRecord> = query("read moderation history") { database ->
+        database.withStatement(
+            "SELECT command, label, actor, recorded_at, reason, expires_at FROM moderation_history " +
+                "WHERE scope = ? AND target = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        ) { statement ->
+            statement.setString(1, target.kind.name)
+            statement.setString(2, target.value)
+            statement.setInt(3, limit)
+            statement.setLong(4, offset)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(ModerationRecord(rows.getString("command"), target, rows.getString("label"), rows.getString("actor"),
+                            Instant.ofEpochMilli(rows.getLong("recorded_at")), rows.getString("reason"), rows.expiration()))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun Connection.recordModeration(record: ModerationRecord) {
+        withStatement(
+            "INSERT INTO moderation_history (scope, target, command, label, actor, recorded_at, reason, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ) { statement ->
+            statement.setString(1, record.target.kind.name)
+            statement.setString(2, record.target.value)
+            statement.setString(3, record.command)
+            statement.setString(4, record.label)
+            statement.setString(5, record.actor)
+            statement.setLong(6, record.time.toEpochMilli())
+            statement.setString(7, record.reason)
+            statement.setExpiration(8, record.expiresAt)
+            statement.executeUpdate()
+        }
+    }
 
     suspend fun get(group: DestinationGroup, name: String): Position? = query("read ${group.kind.key}") { database ->
         database.withStatement("SELECT world_id, x, y, z, yaw, pitch FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
@@ -210,27 +305,55 @@ internal class SqliteStorage(
                     check(rows.next()) { "Unable to read SQLite schema version" }
                     rows.getInt(1)
                 }
-                when (version) {
-                    0 -> {
-                        statement.executeUpdate(
-                            """
-                            CREATE TABLE destinations (
-                                kind TEXT NOT NULL CHECK(kind IN ('home', 'warp', 'spawn')),
-                                owner TEXT NOT NULL,
-                                name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 32),
-                                world_id TEXT NOT NULL,
-                                x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
-                                yaw REAL NOT NULL, pitch REAL NOT NULL,
-                                PRIMARY KEY(kind, owner, name),
-                                CHECK((kind = 'home' AND length(owner) = 36) OR (kind != 'home' AND owner = '')),
-                                CHECK(kind != 'spawn' OR name = 'spawn')
-                            ) WITHOUT ROWID, STRICT
-                            """.trimIndent(),
-                        )
-                        statement.executeUpdate("PRAGMA user_version = 1")
-                    }
-                    1 -> Unit
-                    else -> error("Unsupported SQLite schema version $version. Check the installed QuickStart version.")
+                check(version in 0..2) { "Unsupported SQLite schema version $version. Check the installed QuickStart version." }
+                if (version == 0) {
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE destinations (
+                            kind TEXT NOT NULL CHECK(kind IN ('home', 'warp', 'spawn')),
+                            owner TEXT NOT NULL,
+                            name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 32),
+                            world_id TEXT NOT NULL,
+                            x REAL NOT NULL, y REAL NOT NULL, z REAL NOT NULL,
+                            yaw REAL NOT NULL, pitch REAL NOT NULL,
+                            PRIMARY KEY(kind, owner, name),
+                            CHECK((kind = 'home' AND length(owner) = 36) OR (kind != 'home' AND owner = '')),
+                            CHECK(kind != 'spawn' OR name = 'spawn')
+                        ) WITHOUT ROWID, STRICT
+                        """.trimIndent(),
+                    )
+                }
+                if (version < 2) {
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE sanctions (
+                            kind TEXT NOT NULL CHECK(kind IN ('BAN', 'MUTE')),
+                            scope TEXT NOT NULL CHECK(scope IN ('ACCOUNT', 'IP', 'RANGE')),
+                            target TEXT NOT NULL,
+                            reason TEXT,
+                            expires_at INTEGER,
+                            PRIMARY KEY(kind, scope, target),
+                            CHECK(kind = 'BAN' OR scope != 'RANGE')
+                        ) WITHOUT ROWID, STRICT
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE moderation_history (
+                            id INTEGER PRIMARY KEY,
+                            scope TEXT NOT NULL CHECK(scope IN ('ACCOUNT', 'IP', 'RANGE')),
+                            target TEXT NOT NULL,
+                            command TEXT NOT NULL,
+                            label TEXT NOT NULL,
+                            actor TEXT NOT NULL,
+                            recorded_at INTEGER NOT NULL,
+                            reason TEXT,
+                            expires_at INTEGER
+                        ) STRICT
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate("CREATE INDEX moderation_history_target ON moderation_history(scope, target, id DESC)")
+                    statement.executeUpdate("PRAGMA user_version = 2")
                 }
             }
         }
@@ -239,6 +362,8 @@ internal class SqliteStorage(
     private fun verify(database: Connection) {
         database.createStatement().use { statement ->
             statement.executeQuery("SELECT kind, owner, name, world_id, x, y, z, yaw, pitch FROM destinations LIMIT 0").close()
+            statement.executeQuery("SELECT kind, scope, target, reason, expires_at FROM sanctions LIMIT 0").close()
+            statement.executeQuery("SELECT id, scope, target, command, label, actor, recorded_at, reason, expires_at FROM moderation_history LIMIT 0").close()
         }
     }
 
@@ -270,6 +395,18 @@ internal class SqliteStorage(
         if (name != null) setString(3, name)
     }
 
+    private fun PreparedStatement.bind(key: SanctionKey) {
+        setString(1, key.kind.name)
+        setString(2, key.target.kind.name)
+        setString(3, key.target.value)
+    }
+
+    private fun PreparedStatement.setExpiration(parameter: Int, expiresAt: Instant?) {
+        if (expiresAt == null) setNull(parameter, Types.BIGINT) else setLong(parameter, expiresAt.toEpochMilli())
+    }
+
+    private fun ResultSet.expiration(): Instant? = getLong("expires_at").let { if (wasNull()) null else Instant.ofEpochMilli(it) }
+
     private fun ResultSet.position() = Position(
         UUID.fromString(getString("world_id")), coordinate("x").toDouble(), coordinate("y").toDouble(),
         coordinate("z").toDouble(), coordinate("yaw").toFloat(), coordinate("pitch").toFloat(),
@@ -298,6 +435,11 @@ internal class SqliteStorage(
 
     private companion object {
         const val MAX_PENDING_OPERATIONS_DEFAULT = 128
+        val UPSERT_SANCTION = """
+            INSERT INTO sanctions (kind, scope, target, reason, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(kind, scope, target) DO UPDATE SET reason = excluded.reason, expires_at = excluded.expires_at
+        """.trimIndent()
         val UPSERT_DESTINATION = """
             INSERT INTO destinations (kind, owner, name, world_id, x, y, z, yaw, pitch)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

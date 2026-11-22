@@ -44,6 +44,6 @@ internal class Spawn(
 
     suspend fun placeFirstJoin(player: PlayerSession): Message? {
         val position = storage.get(spawn, "spawn") ?: return null
-        return teleports.move(player, position).failureMessage
+        return teleports.move(player, position, warmup = false).failureMessage
     }
 }

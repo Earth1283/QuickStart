@@ -14,6 +14,7 @@ class ConfigurationTest {
         assertEquals(StartupStrategy.ADHD, configuration.startup)
         assertEquals(Configuration.featureIds.toSet(), configuration.enabledModules)
         assertEquals(5, configuration.features.homeLimit)
+        assertEquals(3, configuration.features.teleportWarmupSeconds)
         assertEquals(2, configuration.warmup.workers(0))
         assertEquals(0, configuration.warmup.workers(1))
     }
@@ -44,6 +45,7 @@ class ConfigurationTest {
             "startup: soon" to "startup must be LAZY, ADHD, or ALL_AT_ONCE",
             "homes: off" to "homes must be a configuration section",
             "homes: {limit: 0}" to "homes.limit must be an integer from 1 to 1000",
+            "teleportation: {warmup-seconds: -1}" to "teleportation.warmup-seconds must be an integer from 0 to 3600",
             "modules: {homes: 'false'}" to "modules.homes must be true or false",
             "storage: {backend: postgres}" to "storage.backend must be sqlite",
         )
@@ -66,11 +68,13 @@ class ConfigurationTest {
               request-send-cooldown-seconds: 3
               request-teleport-cooldown-seconds: 4
               back-cooldown-seconds: 0
+              warmup-seconds: 0
               strict-tpahere: true
         """.trimIndent()).features
         assertEquals(3, overrides.requestSendCooldownSeconds)
         assertEquals(4, overrides.requestTeleportCooldownSeconds)
         assertEquals(0, overrides.backCooldownSeconds)
+        assertEquals(0, overrides.teleportWarmupSeconds)
         assertTrue(overrides.strictTpahere)
     }
 

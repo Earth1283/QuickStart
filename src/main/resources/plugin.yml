@@ -9,7 +9,7 @@ authors: [Earth1283]
 commands:
   qs:
     description: Show QuickStart help and diagnostics.
-    usage: /<command> [help|modules|doctor|diagnostics startup|reload]
+    usage: /<command> [help|modules|doctor|diagnostics startup|reload|mod <target>]
   tpa:
     description: Ask to teleport to another player.
     usage: /<command> <player>
@@ -74,7 +74,150 @@ commands:
     description: Teleport to the server spawn.
     usage: /<command>
     permission: quickstart.spawn
+  ban:
+    description: Permanently ban a player account.
+    usage: /<command> <player|uuid> [reason]
+    permission: quickstart.moderation.ban
+  tempban:
+    description: Temporarily ban a player account.
+    usage: /<command> <player> <duration> <reason>
+    permission: quickstart.moderation.tempban
+  unban:
+    description: Lift a QuickStart account ban.
+    usage: /<command> <player|uuid>
+    permission: quickstart.moderation.unban
+  ipban:
+    description: Permanently ban an IP address.
+    aliases: [banip]
+    usage: /<command> <ip|online player> [reason]
+    permission: quickstart.moderation.ipban
+  tempipban:
+    description: Temporarily ban an IP address.
+    usage: /<command> <ip|online player> <duration|date time> [reason]
+    permission: quickstart.moderation.tempipban
+  unbanip:
+    description: Lift a QuickStart IP ban.
+    usage: /<command> <ip|online player>
+    permission: quickstart.moderation.unbanip
+  iprangeban:
+    description: Permanently ban an IP network using CIDR notation.
+    usage: /<command> <cidr> [reason]
+    permission: quickstart.moderation.iprangeban
+  tempiprangeban:
+    description: Temporarily ban an IP network using CIDR notation.
+    usage: /<command> <cidr> <duration|date time> [reason]
+    permission: quickstart.moderation.tempiprangeban
+  unbaniprange:
+    description: Lift a QuickStart IP network ban.
+    usage: /<command> <cidr>
+    permission: quickstart.moderation.unbaniprange
+  mute:
+    description: Permanently mute a player account.
+    usage: /<command> <player|uuid> [reason]
+    permission: quickstart.moderation.mute
+  tempmute:
+    description: Temporarily mute a player account.
+    usage: /<command> <player|uuid> <duration|date time> [reason]
+    permission: quickstart.moderation.tempmute
+  unmute:
+    description: Lift a QuickStart account mute.
+    usage: /<command> <player|uuid>
+    permission: quickstart.moderation.unmute
+  ipmute:
+    description: Permanently mute an IP address.
+    usage: /<command> <ip|online player> [reason]
+    permission: quickstart.moderation.ipmute
+  tempipmute:
+    description: Temporarily mute an IP address.
+    usage: /<command> <ip|online player> <duration|date time> [reason]
+    permission: quickstart.moderation.tempipmute
+  unmuteip:
+    description: Lift a QuickStart IP mute.
+    usage: /<command> <ip|online player>
+    permission: quickstart.moderation.unmuteip
+  kick:
+    description: Disconnect an online player with a message.
+    usage: /<command> <player> [reason]
+    permission: quickstart.moderation.kick
+  banstatus:
+    description: Check active QuickStart bans for an account, address, or network.
+    usage: /<command> <player|uuid|ip|cidr>
+    permission: quickstart.moderation.banstatus
+  mutestatus:
+    description: Check active QuickStart mutes for an account or address.
+    usage: /<command> <player|uuid|ip>
+    permission: quickstart.moderation.mutestatus
+  modhistory:
+    description: Browse QuickStart moderation history for an account, address, or network.
+    usage: /<command> <player|uuid|ip|cidr> [page]
+    permission: quickstart.moderation.modhistory
 permissions:
+  quickstart.moderation:
+    description: Use all QuickStart moderation commands.
+    default: op
+    children:
+      quickstart.moderation.ban: true
+      quickstart.moderation.tempban: true
+      quickstart.moderation.unban: true
+      quickstart.moderation.ipban: true
+      quickstart.moderation.tempipban: true
+      quickstart.moderation.unbanip: true
+      quickstart.moderation.iprangeban: true
+      quickstart.moderation.tempiprangeban: true
+      quickstart.moderation.unbaniprange: true
+      quickstart.moderation.mute: true
+      quickstart.moderation.tempmute: true
+      quickstart.moderation.unmute: true
+      quickstart.moderation.ipmute: true
+      quickstart.moderation.tempipmute: true
+      quickstart.moderation.unmuteip: true
+      quickstart.moderation.kick: true
+      quickstart.moderation.inspect: true
+  quickstart.moderation.inspect:
+    description: Inspect moderation status and history.
+    default: false
+    children:
+      quickstart.moderation.banstatus: true
+      quickstart.moderation.mutestatus: true
+      quickstart.moderation.modhistory: true
+  quickstart.moderation.ban:
+    default: false
+  quickstart.moderation.tempban:
+    default: false
+  quickstart.moderation.unban:
+    default: false
+  quickstart.moderation.ipban:
+    default: false
+  quickstart.moderation.tempipban:
+    default: false
+  quickstart.moderation.unbanip:
+    default: false
+  quickstart.moderation.iprangeban:
+    default: false
+  quickstart.moderation.tempiprangeban:
+    default: false
+  quickstart.moderation.unbaniprange:
+    default: false
+  quickstart.moderation.mute:
+    default: false
+  quickstart.moderation.tempmute:
+    default: false
+  quickstart.moderation.unmute:
+    default: false
+  quickstart.moderation.ipmute:
+    default: false
+  quickstart.moderation.tempipmute:
+    default: false
+  quickstart.moderation.unmuteip:
+    default: false
+  quickstart.moderation.kick:
+    default: false
+  quickstart.moderation.banstatus:
+    default: false
+  quickstart.moderation.mutestatus:
+    default: false
+  quickstart.moderation.modhistory:
+    default: false
   quickstart.admin:
     description: Inspect and reload QuickStart settings.
     default: op

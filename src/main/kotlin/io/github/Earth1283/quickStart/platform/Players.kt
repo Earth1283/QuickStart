@@ -20,6 +20,7 @@ import org.bukkit.entity.Player
 internal class PlayerSession(val player: Player, parent: CoroutineScope) {
     val id: UUID = player.uniqueId
     val name: String = player.name
+    val address = player.address?.address
     private val job = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + job)
     private val commands = Channel<suspend () -> Unit>(capacity = 8)
@@ -32,6 +33,8 @@ internal class PlayerSession(val player: Player, parent: CoroutineScope) {
     // Teleport completion publishes this state before clearing teleportInFlight.
     private var lastTeleports: EnumMap<TeleportAction, Long>? = null
     @Volatile var teleportInFlight = false
+    // Accessed on the player's owning region.
+    var teleportWarmup: TeleportWarmup? = null
     val active: Boolean get() = job.isActive
 
     fun onCooldown(cooldown: TeleportCooldown): Boolean {
@@ -96,6 +99,8 @@ internal class Players(private val scope: CoroutineScope) {
     fun find(name: String): PlayerSession? = synchronized(gate) {
         sessions.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
     }
+
+    fun find(id: UUID): PlayerSession? = synchronized(gate) { sessions[id] }
 
     fun onlineSessions(): List<PlayerSession> = synchronized(gate) {
         sessions.values.filter(PlayerSession::active)

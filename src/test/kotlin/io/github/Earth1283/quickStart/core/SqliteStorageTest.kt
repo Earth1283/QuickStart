@@ -1,6 +1,7 @@
 package io.github.Earth1283.quickStart.core
 
 import java.nio.file.Path
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineStart
@@ -118,6 +119,44 @@ class SqliteStorageTest {
         }
         val failure = assertFailsWith<StorageFailure> { useStorage(file) { error("Unsupported schema opened") } }
         assertTrue(failure.message.orEmpty().contains("Unsupported SQLite schema version 53"))
+    }
+
+    @Test
+    fun `version one migrates without losing locations and moderation survives restart`() = runBlocking {
+        val file = directory.resolve("moderation.db")
+        useStorage(file) { it.save(DestinationGroup.warps, "town", position) }
+        SQLiteDataSource().apply { url = "jdbc:sqlite:$file" }.connection.use { database ->
+            database.createStatement().use { statement ->
+                statement.execute("DROP TABLE moderation_history")
+                statement.execute("DROP TABLE sanctions")
+                statement.execute("PRAGMA user_version = 1")
+            }
+        }
+        val address = checkNotNull(parseIp("192.0.2.1"))
+        val target = SanctionTarget.Range(checkNotNull(IpNetwork.parse("192.0.2.0/24")))
+        val key = SanctionKey(SanctionKind.BAN, target)
+        val actor = UUID.randomUUID()
+        val time = Instant.ofEpochMilli(Instant.now().toEpochMilli())
+        val record = ModerationRecord("iprangeban", target, target.value, "Staff", time, "First\nSecond")
+        val sanction = Sanction(key, record.reason, null)
+        useStorage(file) { storage ->
+            assertEquals(position, storage.get(DestinationGroup.warps, "town"))
+            storage.loadSanctions()
+            assertTrue(storage.saveSanction(sanction, record, canShorten = false))
+            val deadline = time.plusSeconds(600)
+            assertFalse(storage.saveSanction(sanction.copy(expiresAt = deadline), record.copy(expiresAt = deadline), canShorten = false))
+            assertEquals(sanction, storage.sanctions.find(SanctionKind.BAN, actor, address))
+        }
+        val removal = record.copy(command = "unbaniprange", reason = null)
+        useStorage(file) { storage ->
+            storage.loadSanctions()
+            assertEquals(sanction, storage.sanctions.find(SanctionKind.BAN, actor, address))
+            assertTrue(storage.deleteSanction(key, removal))
+            assertFalse(storage.deleteSanction(key, removal))
+            assertNull(storage.sanctions.find(SanctionKind.BAN, actor, address))
+            assertEquals(listOf(removal, record), storage.moderationHistory(target, 5, 0))
+            assertEquals(listOf(record), storage.moderationHistory(target, 5, 1))
+        }
     }
 
     private suspend fun useStorage(file: Path, work: suspend (SqliteStorage) -> Unit) {

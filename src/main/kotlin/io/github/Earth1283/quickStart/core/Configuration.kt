@@ -20,6 +20,7 @@ internal data class FeatureSettings(
     val requestSendCooldownSeconds: Int,
     val requestTeleportCooldownSeconds: Int,
     val backCooldownSeconds: Int,
+    val teleportWarmupSeconds: Int,
     val requestExpirationSeconds: Int,
     val strictTpahere: Boolean,
     val backOnDeath: Boolean,
@@ -48,7 +49,7 @@ internal data class Configuration(
     val maxPendingOperations: Int = 128,
 ) {
     companion object {
-        val featureIds = listOf("teleportation", "homes", "warps", "spawn")
+        val featureIds = listOf("teleportation", "homes", "warps", "spawn", "moderation")
 
         fun load(file: File): Configuration = parse(YamlConfiguration().apply { load(file) })
 
@@ -92,6 +93,7 @@ internal data class Configuration(
                 values.integer("teleportation.request-send-cooldown-seconds", teleportCooldown, 0..3600),
                 values.integer("teleportation.request-teleport-cooldown-seconds", teleportCooldown, 0..3600),
                 values.integer("teleportation.back-cooldown-seconds", teleportCooldown, 0..3600),
+                values.integer("teleportation.warmup-seconds", 3, 0..3600),
                 values.integer("teleportation.request-expiration-seconds", 60, 1..3600),
                 values.boolean("teleportation.strict-tpahere", false),
                 values.boolean("teleportation.back-on-death", true),

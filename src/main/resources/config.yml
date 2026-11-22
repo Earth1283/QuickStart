@@ -14,6 +14,7 @@ modules:
   warps: true
   spawn: true
   teleportation: true # tpa requests
+  moderation: true
 
 # Personal player homes (/home, /sethome, /delhome, /homes).
 homes:
@@ -44,8 +45,10 @@ spawn:
   # Cooldown in seconds between /spawn uses (0 to disable).
   cooldown-seconds: 0
 
-# Teleport requests (/tpa, /tpahere, /tpaccept, /tpdeny) and /back.
+# Teleport settings for QuickStart commands.
 teleportation:
+  # Action bar countdown before teleporting (0 for immediate teleports).
+  warmup-seconds: 3
   # Default cooldown in seconds for each request and /back action (0 to disable).
   cooldown-seconds: 5
   # Optional overrides. Each action has its own timer.
