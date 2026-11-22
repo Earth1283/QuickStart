@@ -1,5 +1,6 @@
 package io.github.Earth1283.quickStart.core
 
+import org.bukkit.plugin.PluginDescriptionFile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -22,7 +23,18 @@ class CommandsTest {
         assertFailsWith<CommandProblem> { FeatureCommand.WARP.parse(arrayOf("here", "there")) }
         assertFailsWith<CommandProblem> { FeatureCommand.WARPS.parse(arrayOf("here")) }
         assertEquals("Alex", FeatureCommand.TPAHERE.parse(arrayOf("Alex")))
+        assertEquals("Alex", FeatureCommand.SEEN.parse(arrayOf("Alex")))
+        assertFailsWith<CommandProblem> { FeatureCommand.SEEN.parse(emptyArray()) }
         assertNull(FeatureCommand.TPACCEPT.parse(emptyArray()))
+        for (toggle in listOf(FeatureCommand.BEDSPAWN, FeatureCommand.SAFETELEPORT)) {
+            assertNull(toggle.parse(emptyArray()))
+            assertEquals("on", toggle.parse(arrayOf("ON")))
+            assertEquals("off", toggle.parse(arrayOf("disable")))
+            assertEquals("default", toggle.parse(arrayOf("reset")))
+            assertEquals("status", toggle.parse(arrayOf("status")))
+            assertFailsWith<CommandProblem> { toggle.parse(arrayOf("invalid")) }
+            assertFailsWith<CommandProblem> { toggle.parse(arrayOf("on", "off")) }
+        }
     }
 
     @Test
@@ -46,5 +58,17 @@ class CommandsTest {
         assertEquals(50, matchingSuggestions((1..80).map { "home-$it" }, "HOME").size)
         assertEquals(listOf("1", "10", "11", "12"), pageSuggestions(60, "1"))
         assertTrue(pageSuggestions(0, "").isEmpty())
+    }
+
+    @Test
+    fun `every feature command declares its command and permission in plugin yml`() {
+        val plugin = checkNotNull(javaClass.getResourceAsStream("/plugin.yml")).use(::PluginDescriptionFile)
+        val permissions = plugin.permissions.map { it.name }.toSet()
+        for (command in FeatureCommand.entries) {
+            assertEquals(command.permission, plugin.commands[command.id]?.get("permission"), "Missing command ${command.id}")
+            assertTrue(command.permission in permissions, "Missing permission ${command.permission}")
+        }
+        assertEquals(listOf("safetp"), plugin.commands["safeteleport"]?.get("aliases"))
+        assertTrue("quickstart.seen.details" in permissions)
     }
 }

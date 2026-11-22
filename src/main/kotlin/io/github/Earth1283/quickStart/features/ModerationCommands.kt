@@ -12,7 +12,7 @@ import java.time.LocalTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-internal enum class ModerationAction { APPLY, TEMPORARY, REMOVE, KICK, STATUS, HISTORY }
+internal enum class ModerationAction { APPLY, TEMPORARY, REMOVE, KICK, STATUS, HISTORY, ALTS }
 
 internal enum class ModerationCommand(
     val id: String,
@@ -38,23 +38,28 @@ internal enum class ModerationCommand(
     KICK("kick", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.KICK),
     BANSTATUS("banstatus", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.STATUS),
     MUTESTATUS("mutestatus", SanctionKind.MUTE, TargetKind.ACCOUNT, ModerationAction.STATUS),
-    MODHISTORY("modhistory", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.HISTORY);
+    MODHISTORY("modhistory", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.HISTORY),
+    ALTS("alts", SanctionKind.BAN, TargetKind.ACCOUNT, ModerationAction.ALTS);
 
-    val isInspection: Boolean get() = action == ModerationAction.STATUS || action == ModerationAction.HISTORY
+    val isInspection: Boolean get() = action == ModerationAction.STATUS || action == ModerationAction.HISTORY || action == ModerationAction.ALTS
 
     val permission: String get() = "quickstart.moderation.$id"
 
     val usage: String
         get() {
             if (this == TEMPBAN) return "/$id <player> <duration> <reason>"
-            val subject = if (isInspection) "<player|uuid|ip|cidr>" else when (target) {
-                TargetKind.ACCOUNT -> if (this == KICK) "<player>" else "<player|uuid>"
-                TargetKind.IP -> "<ip|online player>"
-                TargetKind.RANGE -> "<cidr>"
+            val subject = when {
+                this == ALTS -> "<player|uuid|ip>"
+                isInspection -> "<player|uuid|ip|cidr>"
+                else -> when (target) {
+                    TargetKind.ACCOUNT -> if (this == KICK) "<player>" else "<player|uuid>"
+                    TargetKind.IP -> "<ip|online player>"
+                    TargetKind.RANGE -> "<cidr>"
+                }
             }
             val arguments = when (action) {
                 ModerationAction.REMOVE, ModerationAction.STATUS -> ""
-                ModerationAction.HISTORY -> " [page]"
+                ModerationAction.HISTORY, ModerationAction.ALTS -> " [page]"
                 ModerationAction.TEMPORARY -> " <duration|date time> [reason]"
                 else -> " [reason]"
             }
@@ -63,7 +68,7 @@ internal enum class ModerationCommand(
 
     fun parse(args: Array<out String>, now: Instant = Instant.now()): ModerationArguments {
         val subject = args.firstOrNull()?.takeIf(String::isNotBlank) ?: throw usageProblem()
-        if (action == ModerationAction.HISTORY) {
+        if (action == ModerationAction.HISTORY || action == ModerationAction.ALTS) {
             val page = if (args.size == 1) 1 else args.getOrNull(1)?.toIntOrNull()?.takeIf { args.size == 2 && it > 0 }
                 ?: throw usageProblem()
             return ModerationArguments(subject, page = page)

@@ -127,6 +127,9 @@ class SqliteStorageTest {
         useStorage(file) { it.save(DestinationGroup.warps, "town", position) }
         SQLiteDataSource().apply { url = "jdbc:sqlite:$file" }.connection.use { database ->
             database.createStatement().use { statement ->
+                statement.execute("DROP TABLE player_preferences")
+                statement.execute("DROP TABLE player_ips")
+                statement.execute("DROP TABLE player_profiles")
                 statement.execute("DROP TABLE moderation_history")
                 statement.execute("DROP TABLE sanctions")
                 statement.execute("PRAGMA user_version = 1")
@@ -156,6 +159,65 @@ class SqliteStorageTest {
             assertNull(storage.sanctions.find(SanctionKind.BAN, actor, address))
             assertEquals(listOf(removal, record), storage.moderationHistory(target, 5, 0))
             assertEquals(listOf(record), storage.moderationHistory(target, 5, 1))
+        }
+    }
+
+    @Test
+    fun `version two migrates to version three and persists profiles, alts, and preferences`() = runBlocking {
+        val file = directory.resolve("v3-migration.db")
+        useStorage(file) { it.save(DestinationGroup.warps, "hub", position) }
+        SQLiteDataSource().apply { url = "jdbc:sqlite:$file" }.connection.use { database ->
+            database.createStatement().use { statement ->
+                statement.execute("DROP TABLE player_preferences")
+                statement.execute("DROP TABLE player_ips")
+                statement.execute("DROP TABLE player_profiles")
+                statement.execute("PRAGMA user_version = 2")
+            }
+        }
+        val alexId = UUID.randomUUID()
+        val steveId = UUID.randomUUID()
+        val thirdId = UUID.randomUUID()
+        val joined = Instant.ofEpochMilli(1_700_000_000_000L)
+        val quit = joined.plusSeconds(120)
+
+        useStorage(file) { storage ->
+            assertEquals(position, storage.get(DestinationGroup.warps, "hub"))
+            storage.recordPlayerJoin(alexId, "Alex", "192.0.2.10", joined)
+            storage.recordPlayerQuit(alexId, "Alex", quit, position)
+            storage.recordPlayerJoin(steveId, "Steve", "192.0.2.10", quit.plusSeconds(30))
+            storage.recordPlayerJoin(thirdId, "Other", "198.51.100.5", quit.plusSeconds(60))
+            assertEquals(PlayerPreferences(respectBedSpawn = false, safeTeleport = null), storage.setRespectBedSpawn(alexId, false))
+            assertEquals(PlayerPreferences(respectBedSpawn = false, safeTeleport = false), storage.setSafeTeleport(alexId, false))
+            assertTrue("Alex" in storage.cachedPlayerNames())
+        }
+
+        useStorage(file) { storage ->
+            val profile = checkNotNull(storage.findPlayerProfileByName("alex"))
+            assertEquals(alexId, profile.id)
+            assertEquals(joined, profile.firstSeen)
+            assertEquals(quit, profile.lastQuit)
+            assertEquals("192.0.2.10", profile.lastIp)
+            assertEquals(position.worldId, profile.lastPosition?.worldId)
+            assertEquals(position.x, profile.lastPosition?.x)
+
+            val alts = storage.findAltsForAccount(alexId)
+            assertEquals(listOf("192.0.2.10"), alts.checkedIps)
+            assertEquals(listOf(steveId), alts.accounts.map(AltAccount::id))
+            assertEquals(listOf("192.0.2.10"), alts.accounts.single().sharedIps)
+
+            val onIp = storage.accountsByIp("192.0.2.10")
+            assertEquals(listOf(steveId, alexId), onIp.map(AltAccount::id))
+
+            assertEquals(PlayerPreferences(respectBedSpawn = false, safeTeleport = false), storage.preferences(alexId))
+            assertEquals(PlayerPreferences.DEFAULT, storage.preferences(steveId))
+
+            storage.setRespectBedSpawn(alexId, null)
+            storage.setSafeTeleport(alexId, null)
+            assertEquals(PlayerPreferences.DEFAULT, storage.preferences(alexId))
+        }
+
+        useStorage(file) { storage ->
+            assertEquals(PlayerPreferences.DEFAULT, storage.preferences(alexId))
         }
     }
 

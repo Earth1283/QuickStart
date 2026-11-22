@@ -58,7 +58,7 @@ internal class Administration(private val runtime: QuickStartRuntime) {
 
     private fun help(sender: CommandSender, player: Boolean): List<Message> = buildList {
         add(Message("help.heading"))
-        val groups = listOf("homes", "warps", "spawn", "teleportation").mapNotNull { section ->
+        val groups = listOf("homes", "warps", "spawn", "teleportation", "seen").mapNotNull { section ->
             if (section !in runtime.config.enabledModules) return@mapNotNull null
             val available = FeatureCommand.entries.filter {
                 it.module == section && (player || !it.playerOnly) && sender.hasPermission(it.permission)
@@ -117,7 +117,7 @@ internal class Administration(private val runtime: QuickStartRuntime) {
         val suggestedActions = setOf(
             FeatureCommand.SETHOME, FeatureCommand.DELHOME, FeatureCommand.SETWARP, FeatureCommand.WARP,
             FeatureCommand.DELWARP, FeatureCommand.SETSPAWN, FeatureCommand.TPA, FeatureCommand.TPAHERE,
-            FeatureCommand.TPACCEPT, FeatureCommand.TPDENY,
+            FeatureCommand.TPACCEPT, FeatureCommand.TPDENY, FeatureCommand.SEEN,
         )
     }
 }

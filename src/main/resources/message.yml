@@ -38,6 +38,8 @@ usage:
   required-player: '<yellow>Usage: /<command> \<player></yellow>'
   optional-page: "<yellow>Usage: /<command> [page]</yellow> <gray>Use a positive page number.</gray>"
   optional-player: "<yellow>Usage: /<command> [player]</yellow>"
+  optional-toggle: "<yellow>Usage: /<command> [on|off|default|status]</yellow>"
+  seen: '<yellow>Usage: /<command> \<player|uuid></yellow>'
 
 login:
   starting: "<yellow>QuickStart is still starting. Please try again shortly.</yellow>"
@@ -76,6 +78,47 @@ spawn:
   saved: "<green>Server spawn saved.</green>"
   teleported: "<green>Teleported to spawn.</green>"
   unavailable: "<red>Server spawn is unavailable.</red>"
+
+bedspawn:
+  enabled: "<green>Your bed or respawn anchor will be used when you respawn.</green>"
+  disabled: "<yellow>You will respawn at server spawn instead of your bed or respawn anchor.</yellow>"
+  default-on: "<green>Following the server default: your bed or respawn anchor will be used when you respawn.</green>"
+  default-off: "<yellow>Following the server default: you will respawn at server spawn instead of your bed or respawn anchor.</yellow>"
+  respawn-inactive: "<gray>Note: spawn-on-respawn is currently disabled in server settings, so vanilla respawn applies.</gray>"
+  buttons:
+    enable: "<green>[Use bed/anchor]</green>"
+    enable-hover: "Respect your bed or respawn anchor on respawn."
+    disable: "<yellow>[Use server spawn]</yellow>"
+    disable-hover: "Always respawn at server spawn instead of your bed or anchor."
+    default: "<aqua>[Server default]</aqua>"
+    default-hover: "Clear your personal override and follow the server default."
+
+safeteleport:
+  enabled: "<green>Safe teleport validation is enabled for your teleports.</green>"
+  disabled: "<yellow>Safe teleport validation is disabled for your teleports.</yellow>"
+  default-on: "<green>Following the server default: safe teleport validation is enabled.</green>"
+  default-off: "<yellow>Following the server default: safe teleport validation is disabled.</yellow>"
+  session-only: "<gray>Storage is unavailable; this setting applies for your current session only.</gray>"
+  buttons:
+    enable: "<green>[Enable safety]</green>"
+    enable-hover: "Require destination safety checks before teleporting."
+    disable: "<yellow>[Disable safety]</yellow>"
+    disable-hover: "Skip destination safety checks for your teleports."
+    default: "<aqua>[Server default]</aqua>"
+    default-hover: "Clear your personal override and follow the server default."
+
+seen:
+  online: "<green><player></green> <white>is currently online</white> <gray>(for <duration>).</gray>"
+  offline: "<yellow><player></yellow> <white>was last seen <duration> ago</white> <gray>(<time>).</gray>"
+  first-joined: "<gray>First joined: <white><time></white></gray>"
+  uuid: "<gray>UUID: <white><uuid></white></gray>"
+  ip: "<gray>IP: <white><ip></white></gray>"
+  last-ip: "<gray>Last IP: <white><ip></white></gray>"
+  location: "<gray>Location: <white><world> (<x>, <y>, <z>)</white></gray>"
+  last-location: "<gray>Last location: <white><world> (<x>, <y>, <z>)</white></gray>"
+  banned: "<red>Active ban on record.</red>"
+  muted: "<yellow>Active mute on record.</yellow>"
+  unknown: "<red>No record found for '<player>'.</red>"
 
 back:
   teleported: "<green>Returned to your previous location.</green>"
@@ -120,6 +163,10 @@ teleport:
   in-progress: "<yellow>A teleport is already in progress. Wait for it to finish.</yellow>"
   world-unavailable: "<red>The destination world is unavailable.</red>"
   disconnected: "<red>A player involved in the teleport disconnected.</red>"
+  unsafe-bounds: "<red>Teleport cancelled: the destination is outside the world bounds or border.</red> <gray>Use /safeteleport off to bypass.</gray>"
+  unsafe-hazard: "<red>Teleport cancelled: the destination is hazardous (lava, fire, or damaging block).</red> <gray>Use /safeteleport off to bypass.</gray>"
+  unsafe-obstructed: "<red>Teleport cancelled: the destination is obstructed.</red> <gray>Use /safeteleport off to bypass.</gray>"
+  unsafe-drop: "<red>Teleport cancelled: the destination has no safe ground underneath.</red> <gray>Use /safeteleport off to bypass.</gray>"
 
 moderation:
   usage: "<yellow>Usage <usage></yellow>"
@@ -164,9 +211,25 @@ moderation:
     empty: "<gray>No moderation actions on this page.</gray>"
     entry: "<yellow>/<command></yellow> <white><target></white> <gray>by <actor> on <time></gray>"
     details: "  <reason> <gray>Expires <expiration></gray>"
+  alts:
+    invalid-target: "<red>Enter a player name, UUID, or IP address (CIDR networks are not supported for /alts).</red>"
+    heading-account: "<gold>Linked accounts for <target></gold> <gray>(<ips> recorded IPs, page <page>)</gray>"
+    heading-ip: "<gold>Accounts seen on <target></gold> <gray>(page <page>)</gray>"
+    no-ips: "<gray>No IP history has been recorded for <target> yet.</gray>"
+    empty: "<gray>No linked accounts found for <target>.</gray>"
+    entry: "<white><player></white> <status> <gray>• <seen> • IP: <ips></gray>"
+    badge-online: "<green>[Online]</green>"
+    badge-offline: "<gray>[Offline]</gray>"
+    badge-banned: "<red>[Banned]</red>"
+    badge-muted: "<yellow>[Muted]</yellow>"
+    badge-online-muted: "<green>[Online]</green> <yellow>[Muted]</yellow>"
+    active-now: "online now"
+    last-seen: "last seen <duration> ago"
   buttons:
     status: "<aqua>[Status]</aqua>"
     history: "<aqua>[History]</aqua>"
+    alts: "<aqua>[Alts]</aqua>"
+    seen: "<aqua>[Seen]</aqua>"
     unban: "<yellow>[Unban]</yellow>"
     unmute: "<yellow>[Unmute]</yellow>"
     previous: "<aqua>[Previous]</aqua>"
@@ -183,6 +246,7 @@ help:
     warps: "Warps"
     spawn: "Spawn"
     teleportation: "Teleportation"
+    seen: "Players"
     moderation: "Moderation"
   moderation-command: "<aqua>[/<command>]</aqua>"
   moderation-usage: "<usage>"
@@ -193,6 +257,7 @@ help:
     tpdeny: "<aqua>[Deny]</aqua>"
     tprequests: "<aqua>[Requests]</aqua>"
     back: "<aqua>[Go back]</aqua>"
+    safeteleport: "<aqua>[Safe teleport]</aqua>"
     sethome: "<aqua>[Save home]</aqua>"
     home: "<aqua>[Go home]</aqua>"
     delhome: "<aqua>[Delete home]</aqua>"
@@ -203,6 +268,8 @@ help:
     warps: "<aqua>[Browse warps]</aqua>"
     setspawn: "<aqua>[Set spawn]</aqua>"
     spawn: "<aqua>[Go to spawn]</aqua>"
+    bedspawn: "<aqua>[Bed respawn]</aqua>"
+    seen: "<aqua>[Last seen]</aqua>"
     modules: "<aqua>[Modules]</aqua>"
     doctor: "<aqua>[Doctor]</aqua>"
     startup: "<aqua>[Startup timings]</aqua>"
@@ -216,6 +283,7 @@ help:
     tpdeny: "/tpdeny <gray>• Deny a request from a player, or omit the name to deny the newest.</gray>"
     tprequests: "Browse your pending teleport requests."
     back: "Return to your previous location."
+    safeteleport: "/safeteleport <gray>• Toggle destination safety checks for your teleports.</gray>"
     sethome: "/sethome <gray>• Save your current location as a home.</gray>"
     home: "Teleport to your default home. Use Browse homes to choose a named home."
     delhome: "/delhome <gray>• Remove a saved home.</gray>"
@@ -226,6 +294,8 @@ help:
     warps: "Browse available warps."
     setspawn: "/setspawn <gray>• Make your current location the server spawn.</gray>"
     spawn: "Teleport to the server spawn."
+    bedspawn: "/bedspawn <gray>• Choose whether your bed or respawn anchor overrides server spawn.</gray>"
+    seen: "/seen <gray>• Check when a player was last online.</gray>"
     modules: "Show module states and dependencies."
     doctor: "Check readiness, configuration, and storage."
     startup: "Show startup and module timings."

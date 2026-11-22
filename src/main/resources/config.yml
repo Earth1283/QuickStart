@@ -15,6 +15,7 @@ modules:
   spawn: true
   teleportation: true # tpa requests
   moderation: true
+  seen: true
 
 # Personal player homes (/home, /sethome, /delhome, /homes).
 homes:
@@ -40,6 +41,9 @@ spawn:
   first-join: false
   # Teleport players to spawn after dying.
   on-respawn: false
+  # Keep a player's bed or respawn anchor when spawn.on-respawn is enabled.
+  # Players with quickstart.spawn.bedoverride can override this for themselves.
+  respect-bed-spawn: true
   # Teleport players to spawn on every join.
   on-join: false
   # Cooldown in seconds between /spawn uses (0 to disable).
@@ -63,6 +67,9 @@ teleportation:
   back-on-death: true
   # Record location before QuickStart and other teleports for /back.
   back-on-teleport: true
+  # Verify destinations are safe before teleporting (avoids hazards, suffocation, and unsafe drops).
+  # Players with quickstart.teleport.safetoggle can override this for themselves.
+  safe-teleport: true
 
 # Background warmup settings for ADHD startup mode.
 performance:

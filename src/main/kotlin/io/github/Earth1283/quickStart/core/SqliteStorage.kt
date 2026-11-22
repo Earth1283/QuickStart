@@ -38,6 +38,8 @@ internal class SqliteStorage(
     private val statements = mutableMapOf<String, PreparedStatement>()
     // The SQLite worker publishes immutable name lists after its writes commit.
     private val savedNames = ConcurrentHashMap<DestinationGroup, List<String>>()
+    private val playerPreferences = ConcurrentHashMap<UUID, PlayerPreferences>()
+    private val knownPlayerNames = ConcurrentHashMap<UUID, String>()
     val sanctions = SanctionIndex()
     val closed = CompletableFuture<Unit>()
     private val runtime = Runtime.getRuntime()
@@ -65,9 +67,189 @@ internal class SqliteStorage(
         migrate(database)
         verify(database)
         loadSavedNames(database)
+        loadPlayerCaches(database)
     }
 
     fun cachedNames(group: DestinationGroup): List<String> = savedNames[group].orEmpty()
+
+    fun preferences(id: UUID): PlayerPreferences = playerPreferences[id] ?: PlayerPreferences.DEFAULT
+
+    fun cachedPlayerNames(): List<String> = knownPlayerNames.values.toList()
+
+    suspend fun setRespectBedSpawn(id: UUID, value: Boolean?): PlayerPreferences =
+        updatePreferences(id) { it.copy(respectBedSpawn = value) }
+
+    suspend fun setSafeTeleport(id: UUID, value: Boolean?): PlayerPreferences =
+        updatePreferences(id) { it.copy(safeTeleport = value) }
+
+    private suspend fun updatePreferences(
+        id: UUID,
+        transform: (PlayerPreferences) -> PlayerPreferences,
+    ): PlayerPreferences = query("save player preferences", write = true) { database ->
+        val updated = transform(preferences(id))
+        if (updated.isDefault) {
+            database.withStatement("DELETE FROM player_preferences WHERE uuid = ?") { statement ->
+                statement.setString(1, id.toString())
+                statement.executeUpdate()
+            }
+            playerPreferences.remove(id)
+        } else {
+            database.withStatement(UPSERT_PREFERENCES) { statement ->
+                statement.setString(1, id.toString())
+                statement.setNullableBoolean(2, updated.respectBedSpawn)
+                statement.setNullableBoolean(3, updated.safeTeleport)
+                statement.executeUpdate()
+            }
+            playerPreferences[id] = updated
+        }
+        updated
+    }
+
+    suspend fun recordPlayerJoin(id: UUID, name: String, ip: String?, at: Instant) =
+        query("record player join", write = true) { database ->
+            val millis = at.toEpochMilli()
+            val uuid = id.toString()
+            database.transaction {
+                withStatement(UPSERT_PLAYER_JOIN) { statement ->
+                    statement.setString(1, uuid)
+                    statement.setString(2, name)
+                    statement.setString(3, name.lowercase(java.util.Locale.ROOT))
+                    statement.setLong(4, millis)
+                    statement.setLong(5, millis)
+                    if (ip == null) statement.setNull(6, Types.VARCHAR) else statement.setString(6, ip)
+                    statement.executeUpdate()
+                }
+                if (ip != null) {
+                    withStatement(UPSERT_PLAYER_IP) { statement ->
+                        statement.setString(1, uuid)
+                        statement.setString(2, ip)
+                        statement.setLong(3, millis)
+                        statement.setLong(4, millis)
+                        statement.executeUpdate()
+                    }
+                }
+            }
+            knownPlayerNames[id] = name
+        }
+
+    suspend fun recordPlayerQuit(id: UUID, name: String, at: Instant, position: Position?) =
+        query("record player quit", write = true) { database ->
+            val millis = at.toEpochMilli()
+            val uuid = id.toString()
+            database.withStatement(UPSERT_PLAYER_QUIT) { statement ->
+                statement.setString(1, uuid)
+                statement.setString(2, name)
+                statement.setString(3, name.lowercase(java.util.Locale.ROOT))
+                statement.setLong(4, millis)
+                statement.setLong(5, millis)
+                statement.setLong(6, millis)
+                if (position == null) {
+                    statement.setNull(7, Types.VARCHAR)
+                    statement.setNull(8, Types.DOUBLE)
+                    statement.setNull(9, Types.DOUBLE)
+                    statement.setNull(10, Types.DOUBLE)
+                } else {
+                    statement.setString(7, position.worldId.toString())
+                    statement.setDouble(8, position.x)
+                    statement.setDouble(9, position.y)
+                    statement.setDouble(10, position.z)
+                }
+                statement.executeUpdate()
+            }
+            knownPlayerNames[id] = name
+        }
+
+    suspend fun playerProfile(id: UUID): PlayerProfile? = query("read player profile") { database ->
+        database.withStatement(SELECT_PLAYER_BY_ID) { statement ->
+            statement.setString(1, id.toString())
+            statement.executeQuery().use { rows -> if (rows.next()) rows.playerProfile() else null }
+        }
+    }
+
+    suspend fun findPlayerProfileByName(name: String): PlayerProfile? = query("find player profile") { database ->
+        database.withStatement(SELECT_PLAYER_BY_NAME) { statement ->
+            statement.setString(1, name.lowercase(java.util.Locale.ROOT))
+            statement.executeQuery().use { rows -> if (rows.next()) rows.playerProfile() else null }
+        }
+    }
+
+    suspend fun playerIps(id: UUID): List<PlayerIpRecord> = query("read player ips") { database ->
+        database.withStatement("SELECT ip, first_seen, last_seen FROM player_ips WHERE uuid = ? ORDER BY last_seen DESC") { statement ->
+            statement.setString(1, id.toString())
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        add(PlayerIpRecord(
+                            rows.getString("ip"),
+                            Instant.ofEpochMilli(rows.getLong("first_seen")),
+                            Instant.ofEpochMilli(rows.getLong("last_seen")),
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun accountsByIp(ip: String): List<AltAccount> = query("find accounts by ip") { database ->
+        database.withStatement(SELECT_ACCOUNTS_BY_IP) { statement ->
+            statement.setString(1, ip)
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val id = UUID.fromString(rows.getString("uuid"))
+                        val name = rows.getString("name") ?: id.toString()
+                        val lastSeen = Instant.ofEpochMilli(rows.getLong("last_seen"))
+                        add(AltAccount(id, name, lastSeen, listOf(ip)))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun findAltsForAccount(id: UUID, extraIps: Set<String> = emptySet()): AltLookupResult =
+        query("find linked accounts") { database ->
+            val recordedIps = database.withStatement("SELECT ip FROM player_ips WHERE uuid = ? ORDER BY last_seen DESC") { statement ->
+                statement.setString(1, id.toString())
+                statement.executeQuery().use { rows ->
+                    buildList { while (rows.next()) add(rows.getString("ip")) }
+                }
+            }
+            val allIps = LinkedHashSet<String>(recordedIps.size + extraIps.size).apply {
+                addAll(recordedIps)
+                addAll(extraIps)
+            }.toList()
+            if (allIps.isEmpty()) return@query AltLookupResult(emptyList(), emptyList())
+
+            data class MutableAlt(var name: String, var lastSeen: Instant, val ips: LinkedHashSet<String>)
+            val found = linkedMapOf<UUID, MutableAlt>()
+            for (ip in allIps) {
+                database.withStatement(SELECT_ACCOUNTS_BY_IP) { statement ->
+                    statement.setString(1, ip)
+                    statement.executeQuery().use { rows ->
+                        while (rows.next()) {
+                            val otherId = UUID.fromString(rows.getString("uuid"))
+                            if (otherId == id) continue
+                            val name = rows.getString("name") ?: otherId.toString()
+                            val lastSeen = Instant.ofEpochMilli(rows.getLong("last_seen"))
+                            val existing = found[otherId]
+                            if (existing == null) {
+                                found[otherId] = MutableAlt(name, lastSeen, linkedSetOf(ip))
+                            } else {
+                                if (lastSeen.isAfter(existing.lastSeen)) {
+                                    existing.lastSeen = lastSeen
+                                    existing.name = name
+                                }
+                                existing.ips.add(ip)
+                            }
+                        }
+                    }
+                }
+            }
+            val accounts = found.entries
+                .map { (otherId, data) -> AltAccount(otherId, data.name, data.lastSeen, data.ips.toList()) }
+                .sortedByDescending(AltAccount::lastSeen)
+            AltLookupResult(allIps, accounts)
+        }
 
     suspend fun health() = query("health check", action = ::verify)
 
@@ -245,6 +427,27 @@ internal class SqliteStorage(
         savedNames.putAll(names.mapValues { (_, groupNames) -> groupNames.toList() })
     }
 
+    private fun loadPlayerCaches(database: Connection) {
+        database.createStatement().use { statement ->
+            statement.executeQuery("SELECT uuid, respect_bed_spawn, safe_teleport FROM player_preferences").use { rows ->
+                while (rows.next()) {
+                    val id = runCatching { UUID.fromString(rows.getString("uuid")) }.getOrNull() ?: continue
+                    val preferences = PlayerPreferences(
+                        rows.nullableBoolean("respect_bed_spawn"),
+                        rows.nullableBoolean("safe_teleport"),
+                    )
+                    if (!preferences.isDefault) playerPreferences[id] = preferences
+                }
+            }
+            statement.executeQuery("SELECT uuid, name FROM player_profiles").use { rows ->
+                while (rows.next()) {
+                    val id = runCatching { UUID.fromString(rows.getString("uuid")) }.getOrNull() ?: continue
+                    knownPlayerNames[id] = rows.getString("name")
+                }
+            }
+        }
+    }
+
     override fun close() {
         synchronized(gate) {
             if (!accepting) return
@@ -259,6 +462,8 @@ internal class SqliteStorage(
                 } finally {
                     statements.clear()
                     savedNames.clear()
+                    playerPreferences.clear()
+                    knownPlayerNames.clear()
                     connection = null
                     if (hookRegistered) {
                         try {
@@ -305,7 +510,7 @@ internal class SqliteStorage(
                     check(rows.next()) { "Unable to read SQLite schema version" }
                     rows.getInt(1)
                 }
-                check(version in 0..2) { "Unsupported SQLite schema version $version. Check the installed QuickStart version." }
+                check(version in 0..3) { "Unsupported SQLite schema version $version. Check the installed QuickStart version." }
                 if (version == 0) {
                     statement.executeUpdate(
                         """
@@ -353,7 +558,48 @@ internal class SqliteStorage(
                         """.trimIndent(),
                     )
                     statement.executeUpdate("CREATE INDEX moderation_history_target ON moderation_history(scope, target, id DESC)")
-                    statement.executeUpdate("PRAGMA user_version = 2")
+                }
+                if (version < 3) {
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE IF NOT EXISTS player_profiles (
+                            uuid TEXT PRIMARY KEY CHECK(length(uuid) = 36),
+                            name TEXT NOT NULL,
+                            name_lower TEXT NOT NULL,
+                            first_seen INTEGER NOT NULL,
+                            last_seen INTEGER NOT NULL,
+                            last_quit INTEGER,
+                            last_ip TEXT,
+                            last_world TEXT,
+                            last_x REAL,
+                            last_y REAL,
+                            last_z REAL
+                        ) WITHOUT ROWID, STRICT
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate("CREATE INDEX IF NOT EXISTS player_profiles_name ON player_profiles(name_lower, last_seen DESC)")
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE IF NOT EXISTS player_ips (
+                            uuid TEXT NOT NULL CHECK(length(uuid) = 36),
+                            ip TEXT NOT NULL,
+                            first_seen INTEGER NOT NULL,
+                            last_seen INTEGER NOT NULL,
+                            PRIMARY KEY(uuid, ip)
+                        ) WITHOUT ROWID, STRICT
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate("CREATE INDEX IF NOT EXISTS player_ips_ip ON player_ips(ip, last_seen DESC)")
+                    statement.executeUpdate(
+                        """
+                        CREATE TABLE IF NOT EXISTS player_preferences (
+                            uuid TEXT PRIMARY KEY CHECK(length(uuid) = 36),
+                            respect_bed_spawn INTEGER CHECK(respect_bed_spawn IN (0, 1)),
+                            safe_teleport INTEGER CHECK(safe_teleport IN (0, 1))
+                        ) WITHOUT ROWID, STRICT
+                        """.trimIndent(),
+                    )
+                    statement.executeUpdate("PRAGMA user_version = 3")
                 }
             }
         }
@@ -364,6 +610,9 @@ internal class SqliteStorage(
             statement.executeQuery("SELECT kind, owner, name, world_id, x, y, z, yaw, pitch FROM destinations LIMIT 0").close()
             statement.executeQuery("SELECT kind, scope, target, reason, expires_at FROM sanctions LIMIT 0").close()
             statement.executeQuery("SELECT id, scope, target, command, label, actor, recorded_at, reason, expires_at FROM moderation_history LIMIT 0").close()
+            statement.executeQuery("SELECT uuid, name, name_lower, first_seen, last_seen, last_quit, last_ip, last_world, last_x, last_y, last_z FROM player_profiles LIMIT 0").close()
+            statement.executeQuery("SELECT uuid, ip, first_seen, last_seen FROM player_ips LIMIT 0").close()
+            statement.executeQuery("SELECT uuid, respect_bed_spawn, safe_teleport FROM player_preferences LIMIT 0").close()
         }
     }
 
@@ -405,7 +654,44 @@ internal class SqliteStorage(
         if (expiresAt == null) setNull(parameter, Types.BIGINT) else setLong(parameter, expiresAt.toEpochMilli())
     }
 
+    private fun PreparedStatement.setNullableBoolean(parameter: Int, value: Boolean?) {
+        if (value == null) setNull(parameter, Types.INTEGER) else setInt(parameter, if (value) 1 else 0)
+    }
+
+    private fun ResultSet.nullableBoolean(column: String): Boolean? {
+        val value = getInt(column)
+        return if (wasNull()) null else value != 0
+    }
+
     private fun ResultSet.expiration(): Instant? = getLong("expires_at").let { if (wasNull()) null else Instant.ofEpochMilli(it) }
+
+    private fun ResultSet.nullableInstant(column: String): Instant? =
+        getLong(column).let { if (wasNull()) null else Instant.ofEpochMilli(it) }
+
+    private fun ResultSet.playerProfile(): PlayerProfile {
+        val worldText = getString("last_world")
+        val lastPosition = if (worldText != null) {
+            runCatching {
+                Position(
+                    UUID.fromString(worldText),
+                    coordinate("last_x").toDouble(),
+                    coordinate("last_y").toDouble(),
+                    coordinate("last_z").toDouble(),
+                    0f,
+                    0f,
+                )
+            }.getOrNull()
+        } else null
+        return PlayerProfile(
+            id = UUID.fromString(getString("uuid")),
+            name = getString("name"),
+            firstSeen = Instant.ofEpochMilli(getLong("first_seen")),
+            lastSeen = Instant.ofEpochMilli(getLong("last_seen")),
+            lastQuit = nullableInstant("last_quit"),
+            lastIp = getString("last_ip"),
+            lastPosition = lastPosition,
+        )
+    }
 
     private fun ResultSet.position() = Position(
         UUID.fromString(getString("world_id")), coordinate("x").toDouble(), coordinate("y").toDouble(),
@@ -446,6 +732,56 @@ internal class SqliteStorage(
             ON CONFLICT(kind, owner, name) DO UPDATE SET
                 world_id = excluded.world_id, x = excluded.x, y = excluded.y, z = excluded.z,
                 yaw = excluded.yaw, pitch = excluded.pitch
+        """.trimIndent()
+        val UPSERT_PREFERENCES = """
+            INSERT INTO player_preferences (uuid, respect_bed_spawn, safe_teleport)
+            VALUES (?, ?, ?)
+            ON CONFLICT(uuid) DO UPDATE SET
+                respect_bed_spawn = excluded.respect_bed_spawn,
+                safe_teleport = excluded.safe_teleport
+        """.trimIndent()
+        val UPSERT_PLAYER_JOIN = """
+            INSERT INTO player_profiles (uuid, name, name_lower, first_seen, last_seen, last_ip)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(uuid) DO UPDATE SET
+                name = excluded.name,
+                name_lower = excluded.name_lower,
+                last_seen = excluded.last_seen,
+                last_ip = COALESCE(excluded.last_ip, player_profiles.last_ip)
+        """.trimIndent()
+        val UPSERT_PLAYER_QUIT = """
+            INSERT INTO player_profiles (uuid, name, name_lower, first_seen, last_seen, last_quit, last_world, last_x, last_y, last_z)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(uuid) DO UPDATE SET
+                name = excluded.name,
+                name_lower = excluded.name_lower,
+                last_seen = excluded.last_seen,
+                last_quit = excluded.last_quit,
+                last_world = COALESCE(excluded.last_world, player_profiles.last_world),
+                last_x = COALESCE(excluded.last_x, player_profiles.last_x),
+                last_y = COALESCE(excluded.last_y, player_profiles.last_y),
+                last_z = COALESCE(excluded.last_z, player_profiles.last_z)
+        """.trimIndent()
+        val UPSERT_PLAYER_IP = """
+            INSERT INTO player_ips (uuid, ip, first_seen, last_seen)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(uuid, ip) DO UPDATE SET
+                last_seen = excluded.last_seen
+        """.trimIndent()
+        val SELECT_PLAYER_BY_ID = """
+            SELECT uuid, name, first_seen, last_seen, last_quit, last_ip, last_world, last_x, last_y, last_z
+            FROM player_profiles WHERE uuid = ?
+        """.trimIndent()
+        val SELECT_PLAYER_BY_NAME = """
+            SELECT uuid, name, first_seen, last_seen, last_quit, last_ip, last_world, last_x, last_y, last_z
+            FROM player_profiles WHERE name_lower = ? ORDER BY last_seen DESC LIMIT 1
+        """.trimIndent()
+        val SELECT_ACCOUNTS_BY_IP = """
+            SELECT pi.uuid, COALESCE(pp.name, pi.uuid) AS name, pi.last_seen
+            FROM player_ips pi
+            LEFT JOIN player_profiles pp ON pp.uuid = pi.uuid
+            WHERE pi.ip = ?
+            ORDER BY pi.last_seen DESC
         """.trimIndent()
     }
 }

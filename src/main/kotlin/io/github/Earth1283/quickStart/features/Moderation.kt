@@ -1,5 +1,6 @@
 package io.github.Earth1283.quickStart.features
 
+import io.github.Earth1283.quickStart.core.AltAccount
 import io.github.Earth1283.quickStart.core.ChatAction
 import io.github.Earth1283.quickStart.core.CommandActor
 import io.github.Earth1283.quickStart.core.CommandProblem
@@ -14,6 +15,10 @@ import io.github.Earth1283.quickStart.core.SanctionKind
 import io.github.Earth1283.quickStart.core.SanctionTarget
 import io.github.Earth1283.quickStart.core.SqliteStorage
 import io.github.Earth1283.quickStart.core.TargetKind
+import io.github.Earth1283.quickStart.core.chatPage
+import io.github.Earth1283.quickStart.core.formatDuration
+import io.github.Earth1283.quickStart.core.formatExpiration
+import io.github.Earth1283.quickStart.core.formatTimestamp
 import io.github.Earth1283.quickStart.core.matchingSuggestions
 import io.github.Earth1283.quickStart.core.parseIp
 import io.github.Earth1283.quickStart.platform.EntityUnavailable
@@ -21,6 +26,7 @@ import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.Players
 import io.github.Earth1283.quickStart.platform.ServerScheduler
 import java.net.InetAddress
+import java.time.Duration
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
@@ -54,6 +60,7 @@ internal class Moderation(
         when (command.action) {
             ModerationAction.STATUS -> return status(command.kind, target, label, actor)
             ModerationAction.HISTORY -> return history(target, label, input.page, actor)
+            ModerationAction.ALTS -> return alts(target, label, input.page, actor)
             else -> Unit
         }
         if (input.reason == "<usedialogue>") {
@@ -76,6 +83,7 @@ internal class Moderation(
             for (command in allowed) {
                 val resolved = when {
                     command == ModerationCommand.KICK -> target.takeIf { online != null }
+                    command == ModerationCommand.ALTS -> target.takeIf { it !is SanctionTarget.Range }
                     command.isInspection || command.target == target.kind -> target
                     command.target == TargetKind.IP -> online?.address?.let(SanctionTarget::Ip)
                     else -> null
@@ -92,6 +100,7 @@ internal class Moderation(
                 when (command.action) {
                     ModerationAction.STATUS -> status(command.kind, resolved, input, actor)
                     ModerationAction.HISTORY -> history(resolved, input, 1, actor)
+                    ModerationAction.ALTS -> alts(resolved, input, 1, actor)
                     else -> {
                         val expiry = if (command.action == ModerationAction.TEMPORARY) {
                             val value = deadline?.trim()?.replace(Regex("\\s+"), "T").orEmpty()
@@ -106,9 +115,14 @@ internal class Moderation(
 
     fun complete(command: ModerationCommand, args: Array<out String>): List<String> {
         if (args.size != 1) return command.completeExpiry(args)
-        val names = if (command.target == TargetKind.RANGE) emptyList() else players.onlineSessions().map(PlayerSession::name)
+        val names = if (command.target == TargetKind.RANGE) emptyList() else {
+            val online = players.onlineSessions().map(PlayerSession::name)
+            if (command == ModerationCommand.KICK || command.target == TargetKind.IP) online
+            else online + storage.cachedPlayerNames()
+        }
         val targets = when {
-            command.action == ModerationAction.HISTORY -> SanctionKind.entries.flatMap { storage.sanctions.targetValues(it, null) }
+            command.action == ModerationAction.HISTORY || command.action == ModerationAction.ALTS ->
+                SanctionKind.entries.flatMap { storage.sanctions.targetValues(it, null) }
             command.isInspection -> storage.sanctions.targetValues(command.kind, null)
             command.action == ModerationAction.REMOVE -> storage.sanctions.targetValues(command.kind, command.target)
             else -> emptyList()
@@ -137,14 +151,19 @@ internal class Moderation(
     private suspend fun resolveTarget(command: ModerationCommand, input: String): SanctionTarget {
         if (command.isInspection) {
             parseIp(input)?.let { return SanctionTarget.Ip(it) }
-            if ('/' in input) return SanctionTarget.Range(IpNetwork.parse(input) ?: throw CommandProblem("moderation.invalid-range"))
+            if ('/' in input) {
+                if (command == ModerationCommand.ALTS) throw CommandProblem("moderation.alts.invalid-target")
+                return SanctionTarget.Range(IpNetwork.parse(input) ?: throw CommandProblem("moderation.invalid-range"))
+            }
         }
         return when (command.target) {
             TargetKind.ACCOUNT -> {
                 val uuid = players.find(input)?.id ?: parseId(input)
                 val id = if (command == ModerationCommand.KICK) {
                     uuid?.let(players::find)?.takeIf(PlayerSession::active)?.id
-                } else uuid ?: scheduler.global { server.getOfflinePlayerIfCached(input)?.uniqueId }
+                } else uuid
+                    ?: storage.findPlayerProfileByName(input)?.id
+                    ?: scheduler.global { server.getOfflinePlayerIfCached(input)?.uniqueId }
                 SanctionTarget.Account(id ?: throw CommandProblem(
                     if (command == ModerationCommand.KICK) "moderation.offline-player" else "moderation.unknown-account",
                 ))
@@ -207,7 +226,7 @@ internal class Moderation(
                 val reply = Message("moderation.applied", "command" to command.id, "target" to label, "expiration" to expiration(expiresAt))
                 actor.reply(listOf(reply) + controls(actor, key, allowUndo = true))
             }
-            ModerationAction.STATUS, ModerationAction.HISTORY -> error("Expected a moderation change")
+            ModerationAction.STATUS, ModerationAction.HISTORY, ModerationAction.ALTS -> error("Expected a moderation change")
         }
     }
 
@@ -242,7 +261,7 @@ internal class Moderation(
             if (rows.isEmpty()) add(Message("moderation.history.empty"))
             for (row in rows.take(HISTORY_SIZE)) {
                 add(Message("moderation.history.entry", "command" to row.command, "actor" to row.actor,
-                    "time" to row.time, "target" to row.label))
+                    "time" to formatTimestamp(row.time), "target" to row.label))
                 if (row.reason != null || row.expiresAt != null) {
                     add(Message("moderation.history.details", "reason" to reasonText(row.reason),
                         "expiration" to expiration(row.expiresAt)))
@@ -259,6 +278,109 @@ internal class Moderation(
         actor.reply(replies)
     }
 
+    private suspend fun alts(target: SanctionTarget, label: String, page: Int, actor: CommandActor) {
+        val now = Instant.now()
+        val permitted = permittedCommands(actor)
+        val canSeeSeen = actor.onOwner { it.hasPermission("quickstart.seen") }
+        val (heading, emptyKey, accounts) = when (target) {
+            is SanctionTarget.Account -> {
+                val liveIp = players.find(target.id)?.takeIf(PlayerSession::active)?.ipString
+                val lookup = storage.findAltsForAccount(target.id, setOfNotNull(liveIp))
+                val merged = mergeLiveAlts(target.id, lookup.checkedIps, lookup.accounts, now)
+                Triple(
+                    Message("moderation.alts.heading-account", "target" to label, "ips" to lookup.checkedIps.size, "page" to page),
+                    if (lookup.checkedIps.isEmpty()) "moderation.alts.no-ips" else "moderation.alts.empty",
+                    merged,
+                )
+            }
+            is SanctionTarget.Ip -> {
+                val stored = storage.accountsByIp(target.value)
+                val merged = mergeLiveAlts(null, listOf(target.value), stored, now)
+                Triple(
+                    Message("moderation.alts.heading-ip", "target" to target.value, "page" to page),
+                    "moderation.alts.empty",
+                    merged,
+                )
+            }
+            is SanctionTarget.Range -> throw CommandProblem("moderation.alts.invalid-target")
+        }
+        val chatPage = accounts.chatPage(page)
+        val replies = buildList {
+            add(heading)
+            if (chatPage.entries.isEmpty()) {
+                add(Message(emptyKey, "target" to label))
+            } else {
+                for (account in chatPage.entries) {
+                    val online = players.find(account.id)?.takeIf(PlayerSession::active)
+                    val address = online?.address ?: account.sharedIps.firstNotNullOfOrNull(::parseIp)
+                    val banned = storage.sanctions.find(SanctionKind.BAN, account.id, address, now) != null
+                    val muted = storage.sanctions.find(SanctionKind.MUTE, account.id, address, now) != null
+                    val statusKey = when {
+                        banned -> "moderation.alts.badge-banned"
+                        muted && online != null -> "moderation.alts.badge-online-muted"
+                        online != null -> "moderation.alts.badge-online"
+                        muted -> "moderation.alts.badge-muted"
+                        else -> "moderation.alts.badge-offline"
+                    }
+                    val age = if (online != null) {
+                        Message("moderation.alts.active-now")
+                    } else {
+                        Message("moderation.alts.last-seen", "duration" to formatDuration(Duration.between(account.lastSeen, now)))
+                    }
+                    add(Message(
+                        "moderation.alts.entry",
+                        "player" to account.name,
+                        "status" to Message(statusKey),
+                        "seen" to age,
+                        "ips" to account.sharedIps.joinToString(", "),
+                    ))
+                    val entryButtons = buildList {
+                        if (canSeeSeen) {
+                            val value = "seen ${account.id}"
+                            add(Message("ui.control", "action" to ChatAction(
+                                value,
+                                Message("moderation.buttons.seen"),
+                                Message("moderation.buttons.hover", "command" to value),
+                            )))
+                        }
+                        if (ModerationCommand.BANSTATUS in permitted) add(button("status", ModerationCommand.BANSTATUS, account.id.toString()))
+                        if (ModerationCommand.MODHISTORY in permitted) add(button("history", ModerationCommand.MODHISTORY, account.id.toString()))
+                    }
+                    if (entryButtons.isNotEmpty()) add(actionRow(entryButtons))
+                }
+                val nav = buildList {
+                    if (chatPage.number > 1) add(button("previous", ModerationCommand.ALTS, "${target.value} ${chatPage.number - 1}"))
+                    if (chatPage.number < chatPage.total) add(button("next", ModerationCommand.ALTS, "${target.value} ${chatPage.number + 1}"))
+                }
+                if (nav.isNotEmpty()) add(actionRow(nav))
+            }
+        }
+        actor.reply(replies)
+    }
+
+    private fun mergeLiveAlts(
+        excludeId: UUID?,
+        checkedIps: List<String>,
+        stored: List<AltAccount>,
+        now: Instant,
+    ): List<AltAccount> {
+        if (checkedIps.isEmpty()) return stored
+        val ipSet = checkedIps.toSet()
+        val byId = stored.associateByTo(linkedMapOf(), AltAccount::id)
+        for (session in players.onlineSessions()) {
+            val ip = session.ipString ?: continue
+            if (session.id == excludeId || ip !in ipSet) continue
+            val existing = byId[session.id]
+            if (existing == null) {
+                byId[session.id] = AltAccount(session.id, session.name, now, listOf(ip))
+            } else {
+                val ips = if (ip in existing.sharedIps) existing.sharedIps else existing.sharedIps + ip
+                byId[session.id] = existing.copy(name = session.name, lastSeen = now, sharedIps = ips)
+            }
+        }
+        return byId.values.sortedByDescending(AltAccount::lastSeen)
+    }
+
     private suspend fun permittedCommands(actor: CommandActor): Set<ModerationCommand> = actor.onOwner { sender ->
         ModerationCommand.entries.filterTo(mutableSetOf()) { sender.hasPermission(it.permission) }
     }
@@ -273,6 +395,7 @@ internal class Moderation(
         val buttons = buildList {
             if (showStatus && status in permitted) add(button("status", status, value))
             if (ModerationCommand.MODHISTORY in permitted) add(button("history", ModerationCommand.MODHISTORY, value))
+            if (key.target !is SanctionTarget.Range && ModerationCommand.ALTS in permitted) add(button("alts", ModerationCommand.ALTS, value))
             if (allowUndo && undo != null && undo in permitted) {
                 val label = if (key.kind == SanctionKind.BAN) "unban" else "unmute"
                 add(button(label, undo, value, suggest = true))
@@ -313,7 +436,8 @@ internal class Moderation(
         "expiration" to expiration(sanction.expiresAt),
     )
 
-    private fun expiration(at: Instant?) = at?.toString() ?: Message("moderation.never")
+    private fun expiration(at: Instant?, now: Instant = Instant.now()): Any =
+        at?.let { formatExpiration(it, now) } ?: Message("moderation.never")
 
     private fun reasonText(value: String?): Any = if (value == null) Message("moderation.no-reason") else reasons.deserialize(value)
 

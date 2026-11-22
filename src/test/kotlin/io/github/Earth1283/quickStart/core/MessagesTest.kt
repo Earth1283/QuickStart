@@ -134,4 +134,28 @@ class MessagesTest {
 
         assertEquals("Nothing saved", plain.serialize(messages.render(Message("homes.empty"))))
     }
+
+    @Test
+    fun `bedspawn, safeteleport, seen, and alts message templates render cleanly`() {
+        assertTrue(plain.serialize(defaults.render(Message("bedspawn.enabled"))).contains("bed or respawn anchor"))
+        assertTrue(plain.serialize(defaults.render(Message("bedspawn.buttons.enable"))).contains("[Use bed/anchor]"))
+        assertTrue(plain.serialize(defaults.render(Message("bedspawn.buttons.disable"))).contains("[Use server spawn]"))
+        assertTrue(plain.serialize(defaults.render(Message("safeteleport.disabled"))).contains("disabled"))
+        assertTrue(plain.serialize(defaults.render(Message("safeteleport.buttons.enable"))).contains("[Enable safety]"))
+        assertTrue(plain.serialize(defaults.render(Message("safeteleport.buttons.disable"))).contains("[Disable safety]"))
+        assertTrue(plain.serialize(defaults.render(Message("teleport.unsafe-hazard"))).contains("/safeteleport off"))
+        assertEquals(
+            "Alex is currently online (for 5m 10s).",
+            plain.serialize(defaults.render(Message("seen.online", "player" to "Alex", "duration" to "5m 10s"))),
+        )
+        val altEntry = defaults.render(Message(
+            "moderation.alts.entry",
+            "player" to "Steve",
+            "status" to Message("moderation.alts.badge-banned"),
+            "seen" to Message("moderation.alts.last-seen", "duration" to "2h 15m"),
+            "ips" to "192.0.2.10",
+        ))
+        assertTrue(plain.serialize(altEntry).contains("Steve [Banned]"))
+        assertTrue(plain.serialize(altEntry).contains("192.0.2.10"))
+    }
 }

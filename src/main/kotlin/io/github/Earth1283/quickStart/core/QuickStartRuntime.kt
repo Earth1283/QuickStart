@@ -6,6 +6,7 @@ import io.github.Earth1283.quickStart.api.Readiness
 import io.github.Earth1283.quickStart.features.Homes
 import io.github.Earth1283.quickStart.features.Moderation
 import io.github.Earth1283.quickStart.features.ModerationCommand
+import io.github.Earth1283.quickStart.features.Seen
 import io.github.Earth1283.quickStart.features.Spawn
 import io.github.Earth1283.quickStart.features.Teleportation
 import io.github.Earth1283.quickStart.features.Warps
@@ -20,6 +21,7 @@ import io.github.Earth1283.quickStart.platform.Teleports
 import io.github.Earth1283.quickStart.platform.snapshot
 import io.papermc.paper.event.player.AsyncChatEvent
 import java.io.File
+import java.time.Instant
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Level
@@ -77,6 +79,7 @@ internal class QuickStartRuntime(
             backHistory,
             recordBack = { features.backOnTeleport },
             warmupSeconds = { features.teleportWarmupSeconds },
+            safeTeleportEnabled = ::isSafeTeleportEnabled,
             render = { messages.render(it) },
         )
     }
@@ -115,7 +118,7 @@ internal class QuickStartRuntime(
     override fun modules() = modules.statuses()
 
     private fun definitions(): List<ModuleDefinition> {
-        val persistent = listOf("homes", "warps", "spawn")
+        val persistent = listOf("homes", "warps", "spawn", "seen")
         val storage = ModuleDefinition("storage", moderationEnabled || persistent.any(config.enabledModules::contains), critical = true) { sqlite.value }
         fun feature(id: String, create: () -> CommandModule) = ModuleDefinition(
             id = id,
@@ -127,10 +130,11 @@ internal class QuickStartRuntime(
             ModuleDefinition("moderation", moderationEnabled, critical = true, required = listOf("storage")) { moduleScope ->
                 Moderation(sqlite.value, players, scheduler, plugin.server, moduleScope, { messages.render(it) }, ::submitDialog)
             },
-            feature("teleportation") { Teleportation(players, scheduler, teleports, checkNotNull(backHistory)) },
+            feature("teleportation") { Teleportation(players, scheduler, teleports, checkNotNull(backHistory), ::storage) },
             feature("homes") { Homes(sqlite.value, teleports) },
             feature("warps") { Warps(sqlite.value, teleports) },
             feature("spawn") { Spawn(sqlite.value, teleports, plugin.server, scheduler) },
+            feature("seen") { Seen(sqlite.value, players, scheduler, plugin.server, moderationEnabled) },
         )
     }
 
@@ -271,6 +275,9 @@ internal class QuickStartRuntime(
     fun onJoin(event: PlayerJoinEvent) {
         val session = players.joined(event.player) ?: return
         if (moderation()?.kickIfBanned(session) == true) return
+        recordProfile { storage ->
+            storage.recordPlayerJoin(session.id, session.name, session.ipString, session.joinedAt)
+        }
         val spawnEnabled = "spawn" in config.enabledModules
         if (spawnEnabled && features.firstJoinSpawn && !event.player.hasPlayedBefore()) {
             session.submit { spawnTeleport(session) }
@@ -280,7 +287,17 @@ internal class QuickStartRuntime(
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
-    fun onQuit(event: PlayerQuitEvent) = players.quit(event.player)
+    fun onQuit(event: PlayerQuitEvent) {
+        val session = players.session(event.player)
+        val quitPosition = if (session != null) runCatching { event.player.location.snapshot() }.getOrNull() else null
+        val quitAt = Instant.now()
+        players.quit(event.player)
+        if (session != null) {
+            recordProfile { storage ->
+                storage.recordPlayerQuit(session.id, session.name, quitAt, quitPosition)
+            }
+        }
+    }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     fun onChat(event: AsyncChatEvent) {
@@ -300,6 +317,26 @@ internal class QuickStartRuntime(
         val notice = moderation.muteNotice(session) ?: return
         event.isCancelled = true
         event.player.sendMessage(messages.render(notice))
+    }
+
+    private fun storage(): SqliteStorage? = modules.readyInstance("storage") as? SqliteStorage
+
+    private fun isSafeTeleportEnabled(session: PlayerSession): Boolean =
+        session.safeTeleportOverride ?: storage()?.preferences(session.id)?.safeTeleport ?: features.safeTeleport
+
+    private fun recordProfile(action: suspend (SqliteStorage) -> Unit) {
+        if ("storage" !in modules.criticalIds) return
+        scope.launch {
+            try {
+                bootFinished.await()
+                val storage = storage() ?: return@launch
+                action(storage)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                report("Player profile", failure)
+            }
+        }
     }
 
     private fun moderation(): Moderation? = if (moderationEnabled) modules.readyInstance("moderation") as? Moderation else null
@@ -346,6 +383,9 @@ internal class QuickStartRuntime(
     fun onRespawn(event: PlayerRespawnEvent) {
         if (!features.spawnOnRespawn || "spawn" !in config.enabledModules) return
         val session = players.session(event.player) ?: return
+        val hasPersonalSpawn = event.isBedSpawn || event.isAnchorSpawn
+        val respectPersonalSpawn = storage()?.preferences(session.id)?.respectBedSpawn ?: features.respectBedSpawn
+        if (hasPersonalSpawn && respectPersonalSpawn) return
         session.submit { spawnTeleport(session) }
     }
 
@@ -480,6 +520,14 @@ internal class QuickStartRuntime(
                 if (feature == FeatureCommand.TPREQUESTS) return pageSuggestions(pending.size, prefix)
                 matchingSuggestions(pending.map { it.request.from.name }, prefix)
             }
+            FeatureCommand.BEDSPAWN, FeatureCommand.SAFETELEPORT -> matchingSuggestions(ToggleSetting.suggestions, prefix)
+            FeatureCommand.SEEN -> {
+                val online = players.onlineSessions()
+                    .filter { viewer == null || viewer.hasPermission("quickstart.seen.details") || viewer.canSee(it.player) }
+                    .map(PlayerSession::name)
+                val stored = storage()?.cachedPlayerNames().orEmpty()
+                matchingSuggestions(online + stored, prefix)
+            }
             FeatureCommand.BACK, FeatureCommand.SPAWN, FeatureCommand.SETSPAWN -> emptyList()
         }
     }
@@ -538,7 +586,7 @@ internal class QuickStartRuntime(
                     add(Message("doctor.sqlite-health-failed", "detail" to message(failure)))
                 }
                 previous?.let {
-                    add(Message("doctor.sqlite-last-failure", "time" to it.at, "operation" to it.operation, "detail" to it.reason))
+                    add(Message("doctor.sqlite-last-failure", "time" to formatTimestamp(it.at), "operation" to it.operation, "detail" to it.reason))
                 }
             }
             ModuleState.DISABLED -> add(Message("doctor.sqlite-disabled"))

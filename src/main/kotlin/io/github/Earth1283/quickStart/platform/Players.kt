@@ -1,6 +1,8 @@
 package io.github.Earth1283.quickStart.platform
 
+import com.google.common.net.InetAddresses
 import io.github.Earth1283.quickStart.core.Position
+import java.time.Instant
 import java.util.EnumMap
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -21,6 +23,9 @@ internal class PlayerSession(val player: Player, parent: CoroutineScope) {
     val id: UUID = player.uniqueId
     val name: String = player.name
     val address = player.address?.address
+    val ipString: String? = address?.let(InetAddresses::toAddrString)
+    val joinedAt: Instant = Instant.now()
+    @Volatile var safeTeleportOverride: Boolean? = null
     private val job = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + job)
     private val commands = Channel<suspend () -> Unit>(capacity = 8)

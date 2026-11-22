@@ -15,6 +15,7 @@ internal data class FeatureSettings(
     val warpNameMaxLength: Int,
     val firstJoinSpawn: Boolean,
     val spawnOnRespawn: Boolean,
+    val respectBedSpawn: Boolean,
     val spawnOnJoin: Boolean,
     val spawnCooldownSeconds: Int,
     val requestSendCooldownSeconds: Int,
@@ -25,6 +26,7 @@ internal data class FeatureSettings(
     val strictTpahere: Boolean,
     val backOnDeath: Boolean,
     val backOnTeleport: Boolean,
+    val safeTeleport: Boolean,
 )
 
 internal data class WarmupSettings(
@@ -49,7 +51,7 @@ internal data class Configuration(
     val maxPendingOperations: Int = 128,
 ) {
     companion object {
-        val featureIds = listOf("teleportation", "homes", "warps", "spawn", "moderation")
+        val featureIds = listOf("teleportation", "homes", "warps", "spawn", "moderation", "seen")
 
         fun load(file: File): Configuration = parse(YamlConfiguration().apply { load(file) })
 
@@ -88,6 +90,7 @@ internal data class Configuration(
                 warpNameMaxLength,
                 values.boolean("spawn.first-join", false),
                 values.boolean("spawn.on-respawn", false),
+                values.boolean("spawn.respect-bed-spawn", true),
                 values.boolean("spawn.on-join", false),
                 values.integer("spawn.cooldown-seconds", 0, 0..3600),
                 values.integer("teleportation.request-send-cooldown-seconds", teleportCooldown, 0..3600),
@@ -98,6 +101,7 @@ internal data class Configuration(
                 values.boolean("teleportation.strict-tpahere", false),
                 values.boolean("teleportation.back-on-death", true),
                 values.boolean("teleportation.back-on-teleport", true),
+                values.boolean("teleportation.safe-teleport", true),
             )
             return Configuration(strategy, modules, warmup, features, maxPendingOperations)
         }

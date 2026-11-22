@@ -15,6 +15,8 @@ class ConfigurationTest {
         assertEquals(Configuration.featureIds.toSet(), configuration.enabledModules)
         assertEquals(5, configuration.features.homeLimit)
         assertEquals(3, configuration.features.teleportWarmupSeconds)
+        assertTrue(configuration.features.respectBedSpawn)
+        assertTrue(configuration.features.safeTeleport)
         assertEquals(2, configuration.warmup.workers(0))
         assertEquals(0, configuration.warmup.workers(1))
     }
@@ -25,8 +27,13 @@ class ConfigurationTest {
             startup: all_at_once
             modules:
               spawn: false
+              seen: false
             homes:
               limit: 16
+            spawn:
+              respect-bed-spawn: false
+            teleportation:
+              safe-teleport: false
             performance:
               warmup:
                 empty-server-workers: 3
@@ -35,7 +42,10 @@ class ConfigurationTest {
         """.trimIndent())
         assertEquals(StartupStrategy.ALL_AT_ONCE, configuration.startup)
         assertFalse("spawn" in configuration.enabledModules)
+        assertFalse("seen" in configuration.enabledModules)
         assertEquals(16, configuration.features.homeLimit)
+        assertFalse(configuration.features.respectBedSpawn)
+        assertFalse(configuration.features.safeTeleport)
         assertEquals(2, configuration.warmup.workers(32))
     }
 

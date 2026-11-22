@@ -6,6 +6,9 @@ import io.github.Earth1283.quickStart.core.CommandProblem
 import io.github.Earth1283.quickStart.core.FeatureCall
 import io.github.Earth1283.quickStart.core.FeatureCommand
 import io.github.Earth1283.quickStart.core.Message
+import io.github.Earth1283.quickStart.core.MessageGroup
+import io.github.Earth1283.quickStart.core.SqliteStorage
+import io.github.Earth1283.quickStart.core.ToggleSetting
 import io.github.Earth1283.quickStart.core.chatPage
 import io.github.Earth1283.quickStart.core.navigation
 import io.github.Earth1283.quickStart.platform.BackHistory
@@ -25,6 +28,7 @@ internal class Teleportation(
     private val scheduler: ServerScheduler,
     private val teleports: Teleports,
     private val backHistory: BackHistory,
+    private val storage: () -> SqliteStorage?,
 ) : CommandModule {
     private val requests = TeleportRequests(PlayerSession::active)
     private var departure: AutoCloseable? = null
@@ -50,8 +54,65 @@ internal class Teleportation(
                 val result = teleports.move(player, position, cooldown)
                 call.teleportResult(result, "back.teleported")
             }
+            FeatureCommand.SAFETELEPORT -> toggleSafeTeleport(call, player)
             else -> error("Unsupported teleportation command ${call.command.id}")
         }
+    }
+
+    private suspend fun toggleSafeTeleport(call: FeatureCall, player: PlayerSession) {
+        val serverDefault = call.settings.safeTeleport
+        val sqlite = storage()
+        val current = player.safeTeleportOverride ?: sqlite?.preferences(player.id)?.safeTeleport
+        val choice = call.argument?.let(ToggleSetting::parse)
+        val updated = when (choice) {
+            ToggleSetting.STATUS -> current
+            ToggleSetting.ON -> persistSafeTeleport(sqlite, player, true)
+            ToggleSetting.OFF -> persistSafeTeleport(sqlite, player, false)
+            ToggleSetting.DEFAULT -> persistSafeTeleport(sqlite, player, null)
+            null -> {
+                val effective = current ?: serverDefault
+                persistSafeTeleport(sqlite, player, !effective)
+            }
+        }
+        val effective = updated ?: serverDefault
+        val stateKey = when {
+            updated == null && effective -> "safeteleport.default-on"
+            updated == null -> "safeteleport.default-off"
+            effective -> "safeteleport.enabled"
+            else -> "safeteleport.disabled"
+        }
+        val replies = buildList {
+            add(Message(stateKey))
+            if (sqlite == null && updated != null) add(Message("safeteleport.session-only"))
+            val actions = buildList {
+                val next = if (effective) "off" else "on"
+                val key = if (effective) "disable" else "enable"
+                add(Message("ui.control", "action" to ChatAction(
+                    "safeteleport $next",
+                    Message("safeteleport.buttons.$key"),
+                    Message("safeteleport.buttons.$key-hover"),
+                )))
+                if (updated != null) {
+                    add(Message("ui.control", "action" to ChatAction(
+                        "safeteleport default",
+                        Message("safeteleport.buttons.default"),
+                        Message("safeteleport.buttons.default-hover"),
+                    )))
+                }
+            }
+            add(Message("ui.action-row", "actions" to MessageGroup(actions, Component.text("  "))))
+        }
+        call.actor.reply(replies)
+    }
+
+    private suspend fun persistSafeTeleport(sqlite: SqliteStorage?, player: PlayerSession, value: Boolean?): Boolean? {
+        if (sqlite != null) {
+            val saved = sqlite.setSafeTeleport(player.id, value).safeTeleport
+            player.safeTeleportOverride = null
+            return saved
+        }
+        player.safeTeleportOverride = value
+        return value
     }
 
     private suspend fun send(call: FeatureCall, from: PlayerSession) {

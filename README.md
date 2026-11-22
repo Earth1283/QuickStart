@@ -22,11 +22,13 @@ QuickStart colors startup messages automatically in an interactive terminal and 
 | --- | --- |
 | `/sethome [name]`, `/home [name]`, `/delhome [name]`, `/homes [page]` | Manage personal homes. The default name is `home` and the default limit is five. |
 | `/setwarp <name>`, `/warp <name>`, `/delwarp <name>`, `/warps [page]` | Manage and use shared destinations. Warp creation and deletion require `quickstart.warps.manage`. |
-| `/setspawn`, `/spawn` | Set or visit the server spawn. `/spawn` falls back to the primary world's spawn until an operator sets one. Setting spawn requires `quickstart.spawn.manage`. |
+| `/setspawn`, `/spawn`, `/bedspawn [on\|off\|default\|status]` | Set or visit the server spawn, or override whether your bed or respawn anchor takes precedence when `spawn.on-respawn` is enabled. Setting spawn requires `quickstart.spawn.manage`; bed overrides use `quickstart.spawn.bedoverride`. |
 | `/tpa <player>`, `/tpahere <player>` | Request a teleport to a player or invite them to teleport to you. Each player can have one outgoing request at a time. |
 | `/tprequests [page]` | Browse incoming teleport requests, newest first. |
 | `/tpaccept [player]`, `/tpdeny [player]` | Respond to a request. Omit the name to respond to the most recent incoming request. |
 | `/back` | Return to your previous teleport or death location during the current session. |
+| `/safeteleport [on\|off\|default\|status]` (`/safetp`) | Toggle destination safety validation (hazards, suffocation, world bounds, and unsafe drops) for your own teleports (`quickstart.teleport.safetoggle`). |
+| `/seen <player\|uuid>` | Show whether a player is online or when they were last seen (`quickstart.seen`). Staff with `quickstart.seen.details` also see UUID, IP, location, active sanctions, and moderation links. |
 | `/qs`, `/qs help` | List available commands. |
 | `/qs modules`, `/qs doctor`, `/qs diagnostics startup`, `/qs reload` | Inspect readiness and timings or reload settings. These subcommands require `quickstart.admin`. |
 
@@ -36,7 +38,7 @@ Incoming requests show when they expire and have clickable Accept and Deny butto
 
 Home, warp, spawn, request sending, request teleporting, and `/back` each have an independent cooldown. Outgoing requests, request teleports, and `/back` default to five seconds through `teleportation.cooldown-seconds`. The optional `request-send-cooldown-seconds`, `request-teleport-cooldown-seconds`, and `back-cooldown-seconds` settings override that default under `teleportation`.
 
-`/home`, `/warp`, `/spawn`, `/back`, and accepted teleport requests show a three-second action bar countdown. Moving or taking damage cancels the countdown. Players can look around while they wait. Set `teleportation.warmup-seconds` to `0` for immediate teleports. Automatic join and respawn placement is immediate.
+`/home`, `/warp`, `/spawn`, `/back`, and accepted teleport requests show a three-second action bar countdown. Moving or taking damage cancels the countdown. Players can look around while they wait. Set `teleportation.warmup-seconds` to `0` for immediate teleports. Safe teleport validation (`teleportation.safe-teleport`, enabled by default) checks destinations on the owning region for hazards, suffocation, bounds, and unsafe drops before teleporting; individual players with `quickstart.teleport.safetoggle` can override it with `/safeteleport`. When `spawn.on-respawn` is enabled, `spawn.respect-bed-spawn` (enabled by default) keeps personal beds and respawn anchors unless a player overrides it with `/bedspawn`. Automatic join and respawn placement is immediate.
 
 `/qs reload` applies home limits, warp visibility, first-join spawn, teleportation settings, and messages. Startup strategy, module selection, and `performance.warmup` settings take effect on restart. Invalid settings leave the current configuration in effect and appear in `/qs doctor`.
 
@@ -56,6 +58,7 @@ Press Tab after a QuickStart command to see matching saved homes, visible warps,
 | `/kick <player> [reason]` | An online player. |
 | `/banstatus <target>`, `/mutestatus <target>` | Active sanctions. An online account lookup also checks its current address. An IP ban lookup includes matching CIDR bans. |
 | `/modhistory <target> [page]` | QuickStart actions for the specified account, IP, or network, newest first. |
+| `/alts <player\|uuid\|ip> [page]` | Accounts that share recorded IP addresses with the specified player or IP, with online and sanction status. |
 
 Add an expiration immediately after the target for temporary commands. Use a duration like `1h30m` or a UTC deadline like `2027-01-08 18:30`. Seconds are optional for a deadline. Press Tab for duration presets, calendar dates, times, and relevant targets. In long date formats, choose the date, type a space, and press Tab again for the time.
 

@@ -34,6 +34,11 @@ commands:
     description: Return to your previous location.
     usage: /<command>
     permission: quickstart.back
+  safeteleport:
+    description: Toggle safe destination checks for your teleports.
+    aliases: [safetp]
+    usage: /<command> [on|off|default|status]
+    permission: quickstart.teleport.safetoggle
   sethome:
     description: Save a home at your current location.
     usage: /<command> [name]
@@ -74,6 +79,14 @@ commands:
     description: Teleport to the server spawn.
     usage: /<command>
     permission: quickstart.spawn
+  bedspawn:
+    description: Choose whether your bed or respawn anchor overrides server spawn on respawn.
+    usage: /<command> [on|off|default|status]
+    permission: quickstart.spawn.bedoverride
+  seen:
+    description: Check when a player was last online.
+    usage: /<command> <player|uuid>
+    permission: quickstart.seen
   ban:
     description: Permanently ban a player account.
     usage: /<command> <player|uuid> [reason]
@@ -151,6 +164,10 @@ commands:
     description: Browse QuickStart moderation history for an account, address, or network.
     usage: /<command> <player|uuid|ip|cidr> [page]
     permission: quickstart.moderation.modhistory
+  alts:
+    description: List accounts that share recorded IP addresses with a player or IP.
+    usage: /<command> <player|uuid|ip> [page]
+    permission: quickstart.moderation.alts
 permissions:
   quickstart.moderation:
     description: Use all QuickStart moderation commands.
@@ -174,12 +191,13 @@ permissions:
       quickstart.moderation.kick: true
       quickstart.moderation.inspect: true
   quickstart.moderation.inspect:
-    description: Inspect moderation status and history.
+    description: Inspect moderation status, history, and linked accounts.
     default: false
     children:
       quickstart.moderation.banstatus: true
       quickstart.moderation.mutestatus: true
       quickstart.moderation.modhistory: true
+      quickstart.moderation.alts: true
   quickstart.moderation.ban:
     default: false
   quickstart.moderation.tempban:
@@ -218,12 +236,17 @@ permissions:
     default: false
   quickstart.moderation.modhistory:
     default: false
+  quickstart.moderation.alts:
+    default: false
   quickstart.admin:
     description: Inspect and reload QuickStart settings.
     default: op
   quickstart.tpa:
     default: true
   quickstart.back:
+    default: true
+  quickstart.teleport.safetoggle:
+    description: Override safe-teleport validation for your own teleports.
     default: true
   quickstart.homes:
     default: true
@@ -236,5 +259,14 @@ permissions:
     default: op
   quickstart.spawn:
     default: true
+  quickstart.spawn.bedoverride:
+    description: Override whether your bed or respawn anchor takes precedence over server spawn.
+    default: true
   quickstart.spawn.manage:
+    default: op
+  quickstart.seen:
+    description: Check when a player was last seen online.
+    default: true
+  quickstart.seen.details:
+    description: View IP address, UUID, location, and moderation details in /seen.
     default: op

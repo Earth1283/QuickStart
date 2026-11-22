@@ -59,6 +59,9 @@ class ModerationCommandsTest {
         val plugin = checkNotNull(javaClass.getResourceAsStream("/plugin.yml")).use(::PluginDescriptionFile)
         val permissions = plugin.permissions.map { it.name }.toSet()
         assertEquals(listOf("banip"), plugin.commands["ipban"]?.get("aliases"))
+        assertEquals("/alts <player|uuid|ip> [page]", ModerationCommand.ALTS.usage)
+        assertEquals(2, ModerationCommand.ALTS.parse(arrayOf("Guest", "2")).page)
+        assertFailsWith<CommandProblem> { ModerationCommand.ALTS.parse(arrayOf("Guest", "0")) }
         assertEquals(ModerationCommand.entries.size, ModerationCommand.entries.map { it.permission }.toSet().size)
         for (command in ModerationCommand.entries) {
             assertEquals(command.permission, plugin.commands[command.id]?.get("permission"))
