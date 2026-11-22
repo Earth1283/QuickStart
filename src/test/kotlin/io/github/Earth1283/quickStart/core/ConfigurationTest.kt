@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class ConfigurationTest {
     @Test
@@ -49,6 +50,28 @@ class ConfigurationTest {
         for ((input, expected) in inputs) {
             assertEquals(expected, assertFailsWith<ConfigurationException> { parse(input) }.message)
         }
+    }
+
+    @Test
+    fun `action cooldowns inherit the shared value and support independent overrides`() {
+        val inherited = parse("teleportation: {cooldown-seconds: 12}").features
+        assertEquals(12, inherited.requestSendCooldownSeconds)
+        assertEquals(12, inherited.requestTeleportCooldownSeconds)
+        assertEquals(12, inherited.backCooldownSeconds)
+        assertFalse(inherited.strictTpahere)
+
+        val overrides = parse("""
+            teleportation:
+              cooldown-seconds: 12
+              request-send-cooldown-seconds: 3
+              request-teleport-cooldown-seconds: 4
+              back-cooldown-seconds: 0
+              strict-tpahere: true
+        """.trimIndent()).features
+        assertEquals(3, overrides.requestSendCooldownSeconds)
+        assertEquals(4, overrides.requestTeleportCooldownSeconds)
+        assertEquals(0, overrides.backCooldownSeconds)
+        assertTrue(overrides.strictTpahere)
     }
 
     private fun parse(content: String): Configuration =

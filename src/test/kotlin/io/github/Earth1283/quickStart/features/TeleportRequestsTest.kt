@@ -33,4 +33,33 @@ class TeleportRequestsTest {
         assertNull(requests.take("Sam") { true })
         assertEquals(RequestStatus.DISCONNECTED, requests.send("Alex", "Steve", false, 0, 30))
     }
+
+    @Test
+    fun `only the recipient's requests are checked and replacements are newest`() {
+        var now = 0L
+        val checked = mutableSetOf<String>()
+        val requests = TeleportRequests<String>(active = {
+            checked.add(it)
+            true
+        }) { now }
+        requests.send("Alex", "Steve", false, 0, 30)
+        requests.send("Sam", "Steve", false, 0, 30)
+        requests.send("Alex", "Steve", true, 0, 30)
+        requests.send("Drew", "Steve", false, 0, 1)
+        requests.send("Terry", "Robin", false, 0, 30)
+        checked.clear()
+        now = TimeUnit.SECONDS.toNanos(1)
+
+        val newest = requests.take("Steve") { true }
+        assertEquals("Alex", newest?.from)
+        assertEquals(true, newest?.bringHere)
+        assertEquals(setOf("Alex", "Steve"), checked)
+        assertNull(requests.take("Steve") { it == "Drew" })
+
+        requests.disconnect("Steve")
+        requests.send("Sam", "Robin", false, 0, 30)
+        assertNull(requests.take("Steve") { true })
+        assertEquals("Sam", requests.take("Robin") { true }?.from)
+        assertEquals("Terry", requests.take("Robin") { true }?.from)
+    }
 }

@@ -7,6 +7,8 @@ import io.github.Earth1283.quickStart.core.FeatureCommand
 import io.github.Earth1283.quickStart.core.SaveResult
 import io.github.Earth1283.quickStart.core.SqliteStorage
 import io.github.Earth1283.quickStart.core.replyWithNames
+import io.github.Earth1283.quickStart.platform.TeleportAction
+import io.github.Earth1283.quickStart.platform.TeleportCooldown
 import io.github.Earth1283.quickStart.platform.Teleports
 
 internal class Homes(private val storage: SqliteStorage, private val teleports: Teleports) : CommandModule {
@@ -28,7 +30,8 @@ internal class Homes(private val storage: SqliteStorage, private val teleports: 
             FeatureCommand.HOME -> {
                 val name = call.name()
                 val position = storage.get(homes, name) ?: return actor.reply("homes.not-found", "name" to name)
-                val result = teleports.move(player, position, call.settings.homeCooldownSeconds.takeIf { it > 0 })
+                val cooldown = TeleportCooldown(TeleportAction.HOME, call.settings.homeCooldownSeconds)
+                val result = teleports.move(player, position, cooldown)
                 call.teleportResult(result, "homes.teleported", "name" to name)
             }
             FeatureCommand.DELHOME -> {
@@ -38,7 +41,7 @@ internal class Homes(private val storage: SqliteStorage, private val teleports: 
             }
             FeatureCommand.HOMES -> {
                 val names = storage.names(homes)
-                replyWithNames(actor, names, "homes.list", "homes.empty")
+                replyWithNames(actor, names, "homes")
             }
             else -> error("Unsupported homes command ${call.command.id}")
         }

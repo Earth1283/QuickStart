@@ -46,13 +46,19 @@ spawn:
 
 # Teleport requests (/tpa, /tpahere, /tpaccept, /tpdeny) and /back.
 teleportation:
-  # Cooldown in seconds between sending requests or using /back (0 to disable).
+  # Default cooldown in seconds for each request and /back action (0 to disable).
   cooldown-seconds: 5
+  # Optional overrides. Each action has its own timer.
+  # request-send-cooldown-seconds: 5
+  # request-teleport-cooldown-seconds: 5
+  # back-cooldown-seconds: 5
   # Time in seconds before a pending teleport request expires.
   request-expiration-seconds: 60
+  # Send /tpahere recipients to the sender's location when the request was made.
+  strict-tpahere: false
   # Record player's death location for /back.
   back-on-death: true
-  # Record location before teleporting for /back.
+  # Record location before QuickStart and other teleports for /back.
   back-on-teleport: true
 
 # Background warmup settings for ADHD startup mode.

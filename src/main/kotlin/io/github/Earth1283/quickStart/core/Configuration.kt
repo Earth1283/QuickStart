@@ -17,8 +17,11 @@ internal data class FeatureSettings(
     val spawnOnRespawn: Boolean,
     val spawnOnJoin: Boolean,
     val spawnCooldownSeconds: Int,
-    val teleportCooldownSeconds: Int,
+    val requestSendCooldownSeconds: Int,
+    val requestTeleportCooldownSeconds: Int,
+    val backCooldownSeconds: Int,
     val requestExpirationSeconds: Int,
+    val strictTpahere: Boolean,
     val backOnDeath: Boolean,
     val backOnTeleport: Boolean,
 )
@@ -74,6 +77,7 @@ internal data class Configuration(
             }
             val homeNameMaxLength = values.integer("homes.name-max-length", 32, 1..32)
             val warpNameMaxLength = values.integer("warps.name-max-length", 32, 1..32)
+            val teleportCooldown = values.integer("teleportation.cooldown-seconds", 5, 0..3600)
             val features = FeatureSettings(
                 values.integer("homes.limit", 5, 1..1000),
                 values.integer("homes.cooldown-seconds", 0, 0..3600),
@@ -85,8 +89,11 @@ internal data class Configuration(
                 values.boolean("spawn.on-respawn", false),
                 values.boolean("spawn.on-join", false),
                 values.integer("spawn.cooldown-seconds", 0, 0..3600),
-                values.integer("teleportation.cooldown-seconds", 5, 0..3600),
+                values.integer("teleportation.request-send-cooldown-seconds", teleportCooldown, 0..3600),
+                values.integer("teleportation.request-teleport-cooldown-seconds", teleportCooldown, 0..3600),
+                values.integer("teleportation.back-cooldown-seconds", teleportCooldown, 0..3600),
                 values.integer("teleportation.request-expiration-seconds", 60, 1..3600),
+                values.boolean("teleportation.strict-tpahere", false),
                 values.boolean("teleportation.back-on-death", true),
                 values.boolean("teleportation.back-on-teleport", true),
             )

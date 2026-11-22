@@ -34,8 +34,11 @@ internal class Messages private constructor(private val templates: Map<String, S
         val template = templates.getValue(message.key)
         val tags = TagResolver.builder()
         for ((name, value) in message.placeholders) {
-            val placeholder = if (value is Message) Placeholder.component(name, render(value))
-            else Placeholder.unparsed(name, value.toString())
+            val placeholder = when (value) {
+                is Message -> Placeholder.component(name, render(value))
+                is Component -> Placeholder.component(name, value)
+                else -> Placeholder.unparsed(name, value.toString())
+            }
             tags.resolver(placeholder)
         }
         tags.resolver(TagResolver.resolver("quickstart") { args, context ->

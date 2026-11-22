@@ -5,6 +5,7 @@ import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.ServerScheduler
 import io.github.Earth1283.quickStart.platform.TeleportResult
 import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.JoinConfiguration
 import org.bukkit.command.CommandSender
 
 internal class CommandProblem(key: String, vararg placeholders: Pair<String, Any>) : IllegalArgumentException(key) {
@@ -107,7 +108,12 @@ internal interface CommandModule : RuntimeModule {
     suspend fun execute(call: FeatureCall)
 }
 
-internal suspend fun replyWithNames(actor: CommandActor, names: List<String>, list: String, empty: String) {
-    if (names.isEmpty()) actor.reply(empty)
-    else actor.reply(names.chunked(10).map { Message(list, "names" to it.joinToString(", ")) })
+internal suspend fun replyWithNames(actor: CommandActor, names: List<String>, section: String) {
+    if (names.isEmpty()) return actor.reply("$section.empty")
+    val separator = JoinConfiguration.commas(true)
+    val notices = names.chunked(10).map { chunk ->
+        val destinations = chunk.map { actor.render(Message("$section.item", "name" to it)) }
+        Message("$section.list", "names" to Component.join(separator, destinations))
+    }
+    actor.reply(notices)
 }

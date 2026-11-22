@@ -10,6 +10,8 @@ import io.github.Earth1283.quickStart.platform.EntityUnavailable
 import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.Players
 import io.github.Earth1283.quickStart.platform.ServerScheduler
+import io.github.Earth1283.quickStart.platform.TeleportAction
+import io.github.Earth1283.quickStart.platform.TeleportCooldown
 import io.github.Earth1283.quickStart.platform.TeleportResult
 import io.github.Earth1283.quickStart.platform.Teleports
 import net.kyori.adventure.text.Component
@@ -39,7 +41,8 @@ internal class Teleportation(
             FeatureCommand.TPACCEPT, FeatureCommand.TPDENY -> respond(call, player)
             FeatureCommand.BACK -> {
                 val position = backHistory.get(player) ?: return call.actor.reply("back.unavailable")
-                val result = teleports.move(player, position, call.settings.teleportCooldownSeconds)
+                val cooldown = TeleportCooldown(TeleportAction.BACK, call.settings.backCooldownSeconds)
+                val result = teleports.move(player, position, cooldown)
                 call.teleportResult(result, "back.teleported")
             }
             else -> error("Unsupported teleportation command ${call.command.id}")
@@ -50,15 +53,21 @@ internal class Teleportation(
         val target = players.find(call.name()) ?: throw CommandProblem("requests.player-unavailable")
         if (from === target) throw CommandProblem("requests.self")
         val bringHere = call.command == FeatureCommand.TPAHERE
+        val expiration = call.settings.requestExpirationSeconds
         val status = try {
+            val destination = if (bringHere && call.settings.strictTpahere) teleports.position(from) else null
             scheduler.entity(target.player) {
                 target.requireActive()
                 if (!target.player.hasPermission("quickstart.tpa")) throw CommandProblem("requests.player-unavailable")
-                requests.send(from, target, bringHere, call.settings.teleportCooldownSeconds, call.settings.requestExpirationSeconds)
+                requests.send(from, target, bringHere, call.settings.requestSendCooldownSeconds, expiration, destination)
                     .also { result ->
                         if (result == RequestStatus.SENT) {
-                            val key = if (bringHere) "requests.incoming-here" else "requests.incoming"
-                            target.player.sendMessage(call.actor.render(Message(key, "player" to from.name)))
+                            val key = when {
+                                destination != null -> "requests.incoming-here-fixed"
+                                bringHere -> "requests.incoming-here"
+                                else -> "requests.incoming"
+                            }
+                            target.player.sendMessage(call.actor.render(Message(key, "player" to from.name, "seconds" to expiration)))
                         }
                     }
             }
@@ -83,9 +92,11 @@ internal class Teleportation(
         }
         val mover = if (request.bringHere) player else request.from
         val anchor = if (request.bringHere) request.from else player
+        val cooldown = TeleportCooldown(TeleportAction.REQUEST, call.settings.requestTeleportCooldownSeconds)
+        val destination = request.destination
         val result = try {
-            val position = teleports.position(anchor)
-            teleports.move(mover, position, call.settings.teleportCooldownSeconds) { anchor.active }
+            if (destination == null) teleports.moveTo(mover, anchor, cooldown)
+            else teleports.move(mover, destination, cooldown, anchor)
         } catch (_: EntityUnavailable) {
             TeleportResult.DISCONNECTED
         }

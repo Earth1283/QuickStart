@@ -34,9 +34,14 @@ class MessagesTest {
     }
 
     @Test
-    fun `both teleport request messages include clickable responses for the requester`() {
-        for (key in listOf("requests.incoming", "requests.incoming-here")) {
-            val rendered = defaults.render(Message(key, "player" to ".Alex_1"))
+    fun `teleport request messages include clickable responses and describe the destination`() {
+        val tooltips = mapOf(
+            "requests.incoming" to "Let .Alex_1 teleport to you.",
+            "requests.incoming-here" to "Teleport to .Alex_1.",
+            "requests.incoming-here-fixed" to "Teleport to where .Alex_1 sent the invitation.",
+        )
+        for ((key, tooltip) in tooltips) {
+            val rendered = defaults.render(Message(key, "player" to ".Alex_1", "seconds" to 45))
             val links = rendered.iterable(ComponentIteratorType.DEPTH_FIRST).filter { it.clickEvent() != null }
 
             assertEquals(listOf("[Accept]", "[Deny]"), links.map(plain::serialize))
@@ -45,6 +50,20 @@ class MessagesTest {
                 links.map { it.clickEvent() },
             )
             assertEquals(listOf(HoverEvent.Action.SHOW_TEXT, HoverEvent.Action.SHOW_TEXT), links.map { it.hoverEvent()?.action() })
+            assertEquals("$tooltip Request lasts 45s.", plain.serialize(links.first().hoverEvent()?.value() as net.kyori.adventure.text.Component))
+        }
+    }
+
+    @Test
+    fun `destination names stay clickable inside the list template`() {
+        for ((section, command) in mapOf("homes" to "home", "warps" to "warp")) {
+            val item = defaults.render(Message("$section.item", "name" to "base-1"))
+            val list = defaults.render(Message("$section.list", "names" to item))
+            val link = list.iterable(ComponentIteratorType.DEPTH_FIRST).single { it.clickEvent() != null }
+
+            assertEquals("base-1", plain.serialize(link))
+            assertEquals(ClickEvent.runCommand("/quickstart:$command base-1"), link.clickEvent())
+            assertEquals("Teleport to $command base-1", plain.serialize(link.hoverEvent()?.value() as net.kyori.adventure.text.Component))
         }
     }
 

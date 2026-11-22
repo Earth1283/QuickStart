@@ -8,6 +8,8 @@ import io.github.Earth1283.quickStart.core.Message
 import io.github.Earth1283.quickStart.core.SqliteStorage
 import io.github.Earth1283.quickStart.platform.PlayerSession
 import io.github.Earth1283.quickStart.platform.ServerScheduler
+import io.github.Earth1283.quickStart.platform.TeleportAction
+import io.github.Earth1283.quickStart.platform.TeleportCooldown
 import io.github.Earth1283.quickStart.platform.Teleports
 import io.github.Earth1283.quickStart.platform.snapshot
 import org.bukkit.Server
@@ -32,7 +34,8 @@ internal class Spawn(
                     server.worlds.firstOrNull()?.spawnLocation?.snapshot()
                 }
                 if (position == null) return call.actor.reply("spawn.unavailable")
-                val result = teleports.move(player, position, call.settings.spawnCooldownSeconds.takeIf { it > 0 })
+                val cooldown = TeleportCooldown(TeleportAction.SPAWN, call.settings.spawnCooldownSeconds)
+                val result = teleports.move(player, position, cooldown)
                 call.teleportResult(result, "spawn.teleported")
             }
             else -> error("Unsupported spawn command ${call.command.id}")

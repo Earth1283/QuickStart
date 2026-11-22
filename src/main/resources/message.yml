@@ -40,6 +40,7 @@ homes:
   not-found: "<red>Home '<name>' was not found.</red>"
   limit: "<yellow>You have reached your limit of <limit> homes.</yellow>"
   list: "<aqua>Homes: <names></aqua>"
+  item: "<hover:show_text:'Teleport to home <name>'><quickstart:home:name><name></quickstart></hover>"
   empty: "<yellow>You have no saved homes.</yellow>"
 
 warps:
@@ -49,6 +50,7 @@ warps:
   teleported: "<green>Teleported to warp '<name>'.</green>"
   not-found: "<red>Warp '<name>' was not found.</red>"
   list: "<aqua>Warps: <names></aqua>"
+  item: "<hover:show_text:'Teleport to warp <name>'><quickstart:warp:name><name></quickstart></hover>"
   empty: "<yellow>No warps are available.</yellow>"
 
 spawn:
@@ -63,12 +65,16 @@ back:
 requests:
   incoming: >-
     <aqua><player> wants to teleport to you.</aqua>
-    <green><hover:show_text:'Accept this teleport request'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
-    <red><hover:show_text:'Deny this teleport request'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+    <green><hover:show_text:'Let <player> teleport to you. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
+    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
   incoming-here: >-
     <aqua><player> asked you to teleport to them.</aqua>
-    <green><hover:show_text:'Accept this teleport request'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
-    <red><hover:show_text:'Deny this teleport request'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+    <green><hover:show_text:'Teleport to <player>. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
+    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
+  incoming-here-fixed: >-
+    <aqua><player> invited you to their original location.</aqua>
+    <green><hover:show_text:'Teleport to where <player> sent the invitation. Request lasts <seconds>s.'><quickstart:tpaccept:player>[Accept]</quickstart></hover></green>
+    <red><hover:show_text:'Decline the request from <player>.'><quickstart:tpdeny:player>[Deny]</quickstart></hover></red>
   sent: "<green>Teleport request sent to <player>.</green>"
   cooldown: "<yellow>Please wait before sending another teleport request.</yellow>"
   player-unavailable: "<red>That player is unavailable.</red>"

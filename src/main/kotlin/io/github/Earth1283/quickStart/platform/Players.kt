@@ -1,9 +1,11 @@
 package io.github.Earth1283.quickStart.platform
 
 import io.github.Earth1283.quickStart.core.Position
+import java.util.EnumMap
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -28,9 +30,20 @@ internal class PlayerSession(val player: Player, parent: CoroutineScope) {
         }
     }
     val disconnected = CompletableDeferred<Unit>()
+    // Teleport completion publishes this state before clearing teleportInFlight.
+    private var lastTeleports: EnumMap<TeleportAction, Long>? = null
     @Volatile var teleportInFlight = false
-    @Volatile var lastRequestTeleport: Long? = null
     val active: Boolean get() = job.isActive
+
+    fun onCooldown(cooldown: TeleportCooldown): Boolean {
+        val previous = lastTeleports?.get(cooldown.action) ?: return false
+        return System.nanoTime() - previous < TimeUnit.SECONDS.toNanos(cooldown.seconds.toLong())
+    }
+
+    fun recordTeleport(action: TeleportAction) {
+        val completed = lastTeleports ?: EnumMap<TeleportAction, Long>(TeleportAction::class.java).also { lastTeleports = it }
+        completed[action] = System.nanoTime()
+    }
 
     fun requireActive() {
         if (!active) throw EntityUnavailable()

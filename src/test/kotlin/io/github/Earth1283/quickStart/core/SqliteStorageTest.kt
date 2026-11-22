@@ -55,6 +55,31 @@ class SqliteStorageTest {
     }
 
     @Test
+    fun `lowering the home limit still allows updates and isolates other owners`() = runBlocking {
+        val homes = DestinationGroup.homes(UUID.randomUUID())
+        val otherHomes = DestinationGroup.homes(UUID.randomUUID())
+        useStorage(directory.resolve("limits.db")) { storage ->
+            for (name in listOf("first", "second", "third")) {
+                assertEquals(SaveResult.CREATED, storage.save(homes, name, position, 3))
+            }
+            assertEquals(SaveResult.LIMIT_REACHED, storage.save(homes, "fourth", position, 2))
+            assertEquals(SaveResult.UPDATED, storage.save(homes, "third", position, 2))
+            assertEquals(SaveResult.CREATED, storage.save(otherHomes, "fourth", position, 2))
+            assertEquals(SaveResult.CREATED, storage.save(homes, "fourth", position, 4))
+        }
+    }
+
+    @Test
+    fun `a failed write does not prevent later saves using the same query`() = runBlocking {
+        useStorage(directory.resolve("retry.db")) { storage ->
+            assertEquals(SaveResult.CREATED, storage.save(DestinationGroup.warps, "town", position))
+            assertFailsWith<StorageFailure> { storage.save(DestinationGroup.spawn, "invalid", position) }
+            assertEquals(SaveResult.CREATED, storage.save(DestinationGroup.spawn, "spawn", position))
+            assertEquals(position, storage.get(DestinationGroup.spawn, "spawn"))
+        }
+    }
+
+    @Test
     fun `accepted writes drain at shutdown when their callers are cancelled`() = runBlocking {
         val file = directory.resolve("drain.db")
         val homeGroup = DestinationGroup.homes(UUID.randomUUID())

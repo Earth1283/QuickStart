@@ -59,7 +59,7 @@ internal class QuickStartRuntime(
     private val scheduler = ServerScheduler(plugin)
     private val players = Players(scope)
     private val backHistory = if ("teleportation" in config.enabledModules) BackHistory(players) else null
-    private val teleports by lazy { Teleports(plugin.server, scheduler, backHistory) }
+    private val teleports by lazy { Teleports(plugin.server, scheduler, backHistory) { features.backOnTeleport } }
     private val sqlite = lazy {
         SqliteStorage(plugin.dataFolder.toPath().resolve("quickstart.db"), config.maxPendingOperations) { report("SQLite shutdown", it) }
     }

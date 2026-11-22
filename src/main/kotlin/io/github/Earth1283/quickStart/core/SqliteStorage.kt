@@ -5,6 +5,7 @@ import java.nio.file.Path
 import java.sql.Connection
 import java.sql.PreparedStatement
 import java.sql.ResultSet
+import java.sql.SQLException
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
@@ -31,6 +32,8 @@ internal class SqliteStorage(
     })
     private var accepting = true
     private var connection: Connection? = null
+    // Only the SQLite worker uses the statements, and the connection closes them at shutdown.
+    private val statements = mutableMapOf<String, PreparedStatement>()
     val closed = CompletableFuture<Unit>()
     private val runtime = Runtime.getRuntime()
     private val shutdownHook = Thread({
@@ -61,14 +64,14 @@ internal class SqliteStorage(
     suspend fun health() = query("health check", action = ::verify)
 
     suspend fun get(group: DestinationGroup, name: String): Position? = query("read ${group.kind.key}") { database ->
-        database.prepareStatement("SELECT world_id, x, y, z, yaw, pitch FROM destinations WHERE kind = ? AND owner = ? AND name = ?").use { statement ->
+        database.withStatement("SELECT world_id, x, y, z, yaw, pitch FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
             statement.bind(group, name)
             statement.executeQuery().use { result -> if (result.next()) result.position() else null }
         }
     }
 
     suspend fun names(group: DestinationGroup): List<String> = query("list ${group.kind.key}s") { database ->
-        database.prepareStatement("SELECT name FROM destinations WHERE kind = ? AND owner = ? ORDER BY name").use { statement ->
+        database.withStatement("SELECT name FROM destinations WHERE kind = ? AND owner = ? ORDER BY name") { statement ->
             statement.bind(group)
             statement.executeQuery().use { result ->
                 buildList {
@@ -86,20 +89,12 @@ internal class SqliteStorage(
         query("save ${group.kind.key}", write = true) { database ->
             require(DestinationNames.normalize(name) == name) { "Invalid destination name" }
             database.transaction {
-                val exists = prepareStatement("SELECT 1 FROM destinations WHERE kind = ? AND owner = ? AND name = ?").use { statement ->
+                val exists = withStatement("SELECT 1 FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
                     statement.bind(group, name)
                     statement.executeQuery().use(ResultSet::next)
                 }
-                if (!exists && limit != null && count(group) >= limit) return@transaction SaveResult.LIMIT_REACHED
-                prepareStatement(
-                    """
-                    INSERT INTO destinations (kind, owner, name, world_id, x, y, z, yaw, pitch)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(kind, owner, name) DO UPDATE SET
-                        world_id = excluded.world_id, x = excluded.x, y = excluded.y, z = excluded.z,
-                        yaw = excluded.yaw, pitch = excluded.pitch
-                    """.trimIndent(),
-                ).use { statement ->
+                if (!exists && limit != null && limitReached(group, limit)) return@transaction SaveResult.LIMIT_REACHED
+                withStatement(UPSERT_DESTINATION) { statement ->
                     statement.bind(group, name)
                     statement.setString(4, position.worldId.toString())
                     statement.setDouble(5, position.x)
@@ -114,7 +109,7 @@ internal class SqliteStorage(
         }
 
     suspend fun delete(group: DestinationGroup, name: String): Boolean = query("delete ${group.kind.key}", write = true) { database ->
-        database.prepareStatement("DELETE FROM destinations WHERE kind = ? AND owner = ? AND name = ?").use { statement ->
+        database.withStatement("DELETE FROM destinations WHERE kind = ? AND owner = ? AND name = ?") { statement ->
             statement.bind(group, name)
             statement.executeUpdate() > 0
         }
@@ -132,6 +127,7 @@ internal class SqliteStorage(
                     closed.completeExceptionally(failure)
                     reportFailure(failure)
                 } finally {
+                    statements.clear()
                     connection = null
                     if (hookRegistered) {
                         try {
@@ -210,14 +206,27 @@ internal class SqliteStorage(
         }
     }
 
-    private fun Connection.count(group: DestinationGroup): Int =
-        prepareStatement("SELECT count(*) FROM destinations WHERE kind = ? AND owner = ?").use { statement ->
+    private fun Connection.limitReached(group: DestinationGroup, limit: Int): Boolean =
+        limit <= 0 || withStatement("SELECT 1 FROM destinations WHERE kind = ? AND owner = ? LIMIT 1 OFFSET ?") { statement ->
             statement.bind(group)
-            statement.executeQuery().use { rows ->
-                check(rows.next()) { "Unable to count saved destinations" }
-                rows.getInt(1)
-            }
+            statement.setInt(3, limit - 1)
+            statement.executeQuery().use(ResultSet::next)
         }
+
+    private inline fun <T> Connection.withStatement(sql: String, action: (PreparedStatement) -> T): T {
+        val statement = statements.getOrPut(sql) { prepareStatement(sql) }
+        try {
+            return action(statement)
+        } catch (failure: SQLException) {
+            statements.remove(sql)
+            try {
+                statement.close()
+            } catch (closeFailure: SQLException) {
+                failure.addSuppressed(closeFailure)
+            }
+            throw failure
+        }
+    }
 
     private fun PreparedStatement.bind(group: DestinationGroup, name: String? = null) {
         setString(1, group.kind.key)
@@ -253,5 +262,12 @@ internal class SqliteStorage(
 
     private companion object {
         const val MAX_PENDING_OPERATIONS_DEFAULT = 128
+        val UPSERT_DESTINATION = """
+            INSERT INTO destinations (kind, owner, name, world_id, x, y, z, yaw, pitch)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, owner, name) DO UPDATE SET
+                world_id = excluded.world_id, x = excluded.x, y = excluded.y, z = excluded.z,
+                yaw = excluded.yaw, pitch = excluded.pitch
+        """.trimIndent()
     }
 }
